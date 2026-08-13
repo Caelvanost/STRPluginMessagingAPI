@@ -14,13 +14,16 @@
 namespace STRPM
 {
     inline constexpr std::uint32_t kInterfaceVersion = 2;
-    inline constexpr std::uint32_t kDiagnosticsVersion = 1;
+    inline constexpr std::uint32_t kDiagnosticsVersion = 2;
+    inline constexpr std::uint32_t kTransportInterfaceVersion = 1;
     inline constexpr std::uint32_t kMaxChannelLength = 96;
     inline constexpr std::uint32_t kMaxPayloadBytes = 24 * 1024;
     inline constexpr char kQueryInterfaceExportName[] =
         "STR_QueryPluginMessagingInterface";
     inline constexpr char kQueryDiagnosticsExportName[] =
         "STR_QueryPluginMessagingDiagnostics";
+    inline constexpr char kQueryTransportExportName[] =
+        "STRPM_QueryTransportInterface";
 
     using ConnectionID = std::uint64_t;
 
@@ -53,6 +56,20 @@ namespace STRPM
         kHost = 2,
         kPlayer = 3,
         kAllPlayers = 4
+    };
+
+    enum class RuntimeBackend : std::uint32_t
+    {
+        kNone = 0,
+        kUdp = 1,
+        kStrBridge = 2
+    };
+
+    enum class RuntimeBackendMode : std::uint32_t
+    {
+        kAuto = 0,
+        kUdp = 1,
+        kStrBridge = 2
     };
 
     struct Target
@@ -133,6 +150,10 @@ namespace STRPM
         std::uint32_t requireKnownPeer{ 0 };
         std::uint16_t localPort{ 0 };
         std::uint16_t reserved{ 0 };
+        RuntimeBackend activeBackend{ RuntimeBackend::kNone };
+        RuntimeBackendMode configuredBackendMode{ RuntimeBackendMode::kAuto };
+        std::uint32_t strBridgeAvailable{ 0 };
+        std::uint32_t strBridgeActive{ 0 };
     };
 
     struct DiagnosticsInterface
@@ -143,6 +164,30 @@ namespace STRPM
             RuntimeStatus* outStatus);
     };
 
+    struct TransportInterface
+    {
+        std::uint32_t version{ kTransportInterfaceVersion };
+
+        Result(STRPM_CALL* start)(
+            ReceiveCallback callback,
+            void* userData);
+
+        Result(STRPM_CALL* stop)();
+
+        Result(STRPM_CALL* send)(
+            const char* channel,
+            Target target,
+            const void* data,
+            std::size_t size,
+            std::uint32_t flags);
+
+        Result(STRPM_CALL* getLocalConnectionID)(
+            ConnectionID* outConnectionID);
+
+        Result(STRPM_CALL* setLocalDisplayName)(
+            const char* displayName);
+    };
+
     using QueryInterfaceFn = Result(STRPM_CALL*)(
         std::uint32_t requestedVersion,
         const Interface** outInterface);
@@ -151,11 +196,18 @@ namespace STRPM
         std::uint32_t requestedVersion,
         const DiagnosticsInterface** outInterface);
 
+    using QueryTransportInterfaceFn = Result(STRPM_CALL*)(
+        std::uint32_t requestedVersion,
+        const TransportInterface** outInterface);
+
     [[nodiscard]] const Interface* LoadFromModule(
         const wchar_t* moduleName = L"STRPluginMessagingAPI.dll") noexcept;
 
     [[nodiscard]] const DiagnosticsInterface* LoadDiagnosticsFromModule(
         const wchar_t* moduleName = L"STRPluginMessagingAPI.dll") noexcept;
+
+    [[nodiscard]] const TransportInterface* LoadTransportFromModule(
+        const wchar_t* moduleName) noexcept;
 
     [[nodiscard]] const char* ResultToString(Result result) noexcept;
 }

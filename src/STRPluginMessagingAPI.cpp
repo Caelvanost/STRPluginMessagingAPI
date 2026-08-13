@@ -103,6 +103,41 @@ namespace STRPM
 #endif
     }
 
+    const TransportInterface* LoadTransportFromModule(
+        const wchar_t* moduleName) noexcept
+    {
+#if defined(_WIN32)
+        const auto module = LoadPluginModule(moduleName);
+        if (module == nullptr) {
+            return nullptr;
+        }
+
+        const auto rawExport =
+            GetProcAddress(module, kQueryTransportExportName);
+        if (rawExport == nullptr) {
+            return nullptr;
+        }
+
+        const auto queryTransport =
+            reinterpret_cast<QueryTransportInterfaceFn>(rawExport);
+
+        const TransportInterface* transport = nullptr;
+        if (queryTransport(kTransportInterfaceVersion, &transport) != Result::kOk) {
+            return nullptr;
+        }
+
+        if (transport == nullptr ||
+            transport->version != kTransportInterfaceVersion) {
+            return nullptr;
+        }
+
+        return transport;
+#else
+        (void)moduleName;
+        return nullptr;
+#endif
+    }
+
     const char* ResultToString(Result result) noexcept
     {
         switch (result) {

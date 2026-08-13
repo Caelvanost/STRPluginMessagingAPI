@@ -1,0 +1,10 @@
+[Resource]
+name = "STR Plugin Messaging Chat Relay"
+version = 0.1.0
+apiset = 1.0.0
+description = "Experimental private STRPM relay using STR server scripting chat events"
+keywords = ["strpm", "plugin-messaging", "relay"]
+license = "MIT"
+repository = "https://github.com/Caelvanost/STRPluginMessagingAPI"
+homepage = "https://github.com/Caelvanost/STRPluginMessagingAPI"
+entrypoint = "main.lua"

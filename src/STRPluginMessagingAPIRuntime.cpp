@@ -30,6 +30,8 @@ namespace
     constexpr std::string_view kDataPrefix = "STRPM|v1|DATA|";
     constexpr std::string_view kAuthField = "|auth=";
     constexpr std::size_t kMaxDatagramBytes = 65000;
+    constexpr wchar_t kDefaultStrBridgeModule[] =
+        L"Data\\SkyrimTogetherReborn\\STRPluginMessagingBridge.dll";
 
     struct SKSEInterface;
 
@@ -43,12 +45,14 @@ namespace
     struct Config
     {
         bool enabled{ true };
+        STRPM::RuntimeBackendMode backendMode{ STRPM::RuntimeBackendMode::kAuto };
         bool autoDiscovery{ true };
         bool relayMode{ false };
         bool requireKnownPeer{ true };
         std::uint16_t localPort{ 27990 };
         std::uint32_t discoveryIntervalMs{ 1500 };
         std::uint32_t peerTimeoutMs{ 15000 };
+        std::wstring strBridgeModule{ kDefaultStrBridgeModule };
         std::string displayName;
         std::string sharedSecret;
         std::vector<sockaddr_in> remotePeers;
@@ -251,6 +255,53 @@ namespace
             });
     }
 
+    STRPM::RuntimeBackendMode ParseBackendMode(std::string value)
+    {
+        std::ranges::transform(value, value.begin(), [](unsigned char c) {
+            return static_cast<char>(std::tolower(c));
+        });
+
+        if (value == "str" ||
+            value == "strbridge" ||
+            value == "str-bridge" ||
+            value == "internal") {
+            return STRPM::RuntimeBackendMode::kStrBridge;
+        }
+        if (value == "udp" ||
+            value == "standalone") {
+            return STRPM::RuntimeBackendMode::kUdp;
+        }
+        return STRPM::RuntimeBackendMode::kAuto;
+    }
+
+    std::wstring WidenUtf8Lossy(std::string_view value)
+    {
+        if (value.empty()) {
+            return {};
+        }
+
+        const auto required = MultiByteToWideChar(
+            CP_UTF8,
+            0,
+            value.data(),
+            static_cast<int>(value.size()),
+            nullptr,
+            0);
+        if (required <= 0) {
+            return {};
+        }
+
+        std::wstring result(static_cast<std::size_t>(required), L'\0');
+        MultiByteToWideChar(
+            CP_UTF8,
+            0,
+            value.data(),
+            static_cast<int>(value.size()),
+            result.data(),
+            required);
+        return result;
+    }
+
     std::uint64_t ParseUInt64(std::string_view text)
     {
         std::uint64_t result = 0;
@@ -375,6 +426,8 @@ namespace
 
         Config config{};
         config.enabled = GetPrivateProfileIntA("Network", "Enabled", 1, path) != 0;
+        config.backendMode =
+            ParseBackendMode(ReadIniString(path, "Transport", "Mode", "Auto"));
         config.autoDiscovery =
             GetPrivateProfileIntA("Network", "AutoDiscovery", 1, path) != 0;
         config.relayMode = GetPrivateProfileIntA("Network", "RelayMode", 0, path) != 0;
@@ -389,6 +442,15 @@ namespace
         config.displayName =
             SanitizeDisplayName(ReadIniString(path, "Identity", "DisplayName", ""));
         config.sharedSecret = ReadIniString(path, "Security", "SharedSecret", "");
+        if (const auto bridgeModule =
+                WidenUtf8Lossy(ReadIniString(
+                    path,
+                    "Transport",
+                    "STRBridgeModule",
+                    "Data\\SkyrimTogetherReborn\\STRPluginMessagingBridge.dll"));
+            !bridgeModule.empty()) {
+            config.strBridgeModule = bridgeModule;
+        }
 
         if (config.displayName == "Player") {
             config.displayName = GetComputerDisplayName();
@@ -433,6 +495,20 @@ namespace
 
             if (!_config.enabled) {
                 return false;
+            }
+
+            CreateLocalIdentity();
+
+            if (_config.backendMode != STRPM::RuntimeBackendMode::kUdp) {
+                if (TryStartStrBridge()) {
+                    _activeBackend.store(STRPM::RuntimeBackend::kStrBridge);
+                    _running.store(true);
+                    return true;
+                }
+
+                if (_config.backendMode == STRPM::RuntimeBackendMode::kStrBridge) {
+                    return false;
+                }
             }
 
             WSADATA wsa{};
@@ -484,15 +560,7 @@ namespace
             _broadcast.sin_port = htons(_config.localPort);
             _broadcast.sin_addr.s_addr = htonl(INADDR_BROADCAST);
 
-            LARGE_INTEGER counter{};
-            QueryPerformanceCounter(&counter);
-            _instanceID = HexEncode(
-                GetDisplayName() + ":" +
-                std::to_string(GetCurrentProcessId()) + ":" +
-                std::to_string(counter.QuadPart));
-            _localConnectionID = HashText(_instanceID);
-            _nextSequence.store(1);
-
+            _activeBackend.store(STRPM::RuntimeBackend::kUdp);
             _running.store(true);
             _receiver = std::jthread([this](std::stop_token token) {
                 ReceiverLoop(token);
@@ -515,6 +583,12 @@ namespace
                     _maintenance.request_stop();
                 }
             }
+
+            if (_strTransport != nullptr && _strTransport->stop != nullptr) {
+                _strTransport->stop();
+            }
+            _strTransport = nullptr;
+            _activeBackend.store(STRPM::RuntimeBackend::kNone);
 
             if (_socket != INVALID_SOCKET) {
                 closesocket(_socket);
@@ -604,6 +678,13 @@ namespace
                 return STRPM::Result::kPayloadTooLarge;
             }
 
+            if (_activeBackend.load() == STRPM::RuntimeBackend::kStrBridge) {
+                if (_strTransport == nullptr || _strTransport->send == nullptr) {
+                    return STRPM::Result::kNotConnected;
+                }
+                return _strTransport->send(channel, target, data, size, flags);
+            }
+
             const auto sequence = _nextSequence.fetch_add(1);
             const auto payload = std::string_view(
                 static_cast<const char*>(data),
@@ -659,6 +740,16 @@ namespace
 
         STRPM::ConnectionID GetLocalConnectionID() const
         {
+            if (_activeBackend.load() == STRPM::RuntimeBackend::kStrBridge &&
+                _strTransport != nullptr &&
+                _strTransport->getLocalConnectionID != nullptr) {
+                STRPM::ConnectionID connectionID = 0;
+                if (_strTransport->getLocalConnectionID(&connectionID) ==
+                        STRPM::Result::kOk &&
+                    connectionID != 0) {
+                    return connectionID;
+                }
+            }
             return _localConnectionID;
         }
 
@@ -672,6 +763,11 @@ namespace
             status.relayMode = _config.relayMode ? 1 : 0;
             status.requireKnownPeer = _config.requireKnownPeer ? 1 : 0;
             status.localPort = _config.localPort;
+            status.activeBackend = _activeBackend.load();
+            status.configuredBackendMode = _config.backendMode;
+            status.strBridgeAvailable = _strBridgeAvailable.load() ? 1 : 0;
+            status.strBridgeActive =
+                _activeBackend.load() == STRPM::RuntimeBackend::kStrBridge ? 1 : 0;
             return status;
         }
 
@@ -687,6 +783,11 @@ namespace
             std::scoped_lock lock(_nameMutex);
             if (displayName != nullptr && displayName[0] != '\0') {
                 _displayName = SanitizeDisplayName(displayName);
+                if (_activeBackend.load() == STRPM::RuntimeBackend::kStrBridge &&
+                    _strTransport != nullptr &&
+                    _strTransport->setLocalDisplayName != nullptr) {
+                    _strTransport->setLocalDisplayName(_displayName.c_str());
+                }
             }
         }
 
@@ -695,6 +796,156 @@ namespace
         ~Broker()
         {
             Stop();
+        }
+
+        void CreateLocalIdentity()
+        {
+            LARGE_INTEGER counter{};
+            QueryPerformanceCounter(&counter);
+            _instanceID = HexEncode(
+                GetDisplayName() + ":" +
+                std::to_string(GetCurrentProcessId()) + ":" +
+                std::to_string(counter.QuadPart));
+            _localConnectionID = HashText(_instanceID);
+            _nextSequence.store(1);
+        }
+
+        static HMODULE LoadStrBridgeModule(const std::wstring& modulePath)
+        {
+            if (modulePath.empty()) {
+                return nullptr;
+            }
+
+            if (auto module = GetModuleHandleW(modulePath.c_str());
+                module != nullptr) {
+                return module;
+            }
+
+            const auto separator = modulePath.find_last_of(L"\\/");
+            const auto moduleName = separator == std::wstring::npos ?
+                modulePath :
+                modulePath.substr(separator + 1);
+            if (!moduleName.empty()) {
+                if (auto module = GetModuleHandleW(moduleName.c_str());
+                    module != nullptr) {
+                    return module;
+                }
+            }
+
+            if (auto module = LoadLibraryW(modulePath.c_str());
+                module != nullptr) {
+                return module;
+            }
+
+            if (!moduleName.empty() && moduleName != modulePath) {
+                if (auto module = LoadLibraryW(moduleName.c_str());
+                    module != nullptr) {
+                    return module;
+                }
+            }
+
+            if (!moduleName.empty()) {
+                std::wstring defaultPath = L"Data\\SkyrimTogetherReborn\\";
+                defaultPath += moduleName;
+                if (defaultPath != modulePath) {
+                    return LoadLibraryW(defaultPath.c_str());
+                }
+            }
+
+            return nullptr;
+        }
+
+        bool TryStartStrBridge()
+        {
+            _strBridgeAvailable.store(false);
+
+            const auto module = LoadStrBridgeModule(_config.strBridgeModule);
+            if (module == nullptr) {
+                return false;
+            }
+
+            const auto rawExport =
+                GetProcAddress(module, STRPM::kQueryTransportExportName);
+            if (rawExport == nullptr) {
+                return false;
+            }
+
+            const auto queryTransport =
+                reinterpret_cast<STRPM::QueryTransportInterfaceFn>(rawExport);
+            const STRPM::TransportInterface* transport = nullptr;
+            const auto queryResult = queryTransport(
+                STRPM::kTransportInterfaceVersion,
+                &transport);
+            if (queryResult != STRPM::Result::kOk ||
+                transport == nullptr ||
+                transport->version != STRPM::kTransportInterfaceVersion ||
+                transport->start == nullptr ||
+                transport->stop == nullptr ||
+                transport->send == nullptr) {
+                return false;
+            }
+
+            _strBridgeAvailable.store(true);
+
+            const auto startResult = transport->start(&StrBridgeReceiveThunk, this);
+            if (startResult != STRPM::Result::kOk) {
+                return false;
+            }
+
+            _strModule = module;
+            _strTransport = transport;
+
+            if (_strTransport->setLocalDisplayName != nullptr) {
+                const auto displayName = GetDisplayName();
+                _strTransport->setLocalDisplayName(displayName.c_str());
+            }
+
+            if (_strTransport->getLocalConnectionID != nullptr) {
+                STRPM::ConnectionID connectionID = 0;
+                if (_strTransport->getLocalConnectionID(&connectionID) ==
+                        STRPM::Result::kOk &&
+                    connectionID != 0) {
+                    _localConnectionID = connectionID;
+                }
+            }
+
+            Log("STR bridge transport active");
+            return true;
+        }
+
+        static void STRPM_CALL StrBridgeReceiveThunk(
+            const STRPM::Message* message,
+            void* userData)
+        {
+            if (message == nullptr || userData == nullptr) {
+                return;
+            }
+
+            static_cast<Broker*>(userData)->DeliverFromStrBridge(*message);
+        }
+
+        void DeliverFromStrBridge(const STRPM::Message& message)
+        {
+            if (!IsValidChannel(message.channel) ||
+                (message.data == nullptr && message.size != 0) ||
+                message.size > STRPM::kMaxPayloadBytes) {
+                return;
+            }
+
+            const std::string_view payload(
+                static_cast<const char*>(message.data),
+                message.size);
+            const auto senderName = message.sender.displayName != nullptr ?
+                std::string_view(message.sender.displayName) :
+                std::string_view("STR");
+
+            Deliver(
+                message.channel,
+                payload,
+                senderName,
+                message.sender.connectionID,
+                message.flags,
+                message.sequence);
         }
 
         static bool IsValidChannel(const char* channel)
@@ -1167,6 +1418,14 @@ namespace
         }
 
         Config _config{};
+        std::atomic<STRPM::RuntimeBackend> _activeBackend{
+            STRPM::RuntimeBackend::kNone
+        };
+
+        HMODULE _strModule{ nullptr };
+        const STRPM::TransportInterface* _strTransport{ nullptr };
+        std::atomic_bool _strBridgeAvailable{ false };
+
         SOCKET _socket{ INVALID_SOCKET };
         sockaddr_in _broadcast{};
         bool _wsaStarted{ false };
@@ -1294,7 +1553,7 @@ extern "C" __declspec(dllexport) bool SKSEPlugin_Query(
 
     pluginInfo->infoVersion = 1;
     pluginInfo->name = "STRPluginMessagingAPI";
-    pluginInfo->version = 3;
+    pluginInfo->version = 4;
     return true;
 }
 

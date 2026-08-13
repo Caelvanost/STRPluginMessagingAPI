@@ -2,11 +2,10 @@
 
 Shared messaging broker for Skyrim Together Reborn compatibility mods.
 
-The long-term goal is still to route these payloads through the existing STR
-connection if the STR team accepts that feature. Until then, this project is a
-functional standalone SKSE plugin: it opens one shared UDP port and exposes a
-single API that my other STR-based mods can use instead of each opening their
-own port.
+The long-term goal is to route these payloads through the existing STR
+connection if the STR team accepts that feature. Until then, this project keeps
+a functional standalone UDP backend and now exposes an experimental bridge slot
+for a private/internal STR transport.
 
 ## Why
 
@@ -47,6 +46,10 @@ The public API lives in
 - API contract drafted.
 - Windows loader implemented.
 - Functional UDP broker implemented.
+- Experimental internal STR transport ABI implemented:
+  `STRPM_QueryTransportInterface`.
+- Runtime backend selection implemented:
+  `Auto`, `UDP`, or `STR`.
 - LAN broadcast discovery implemented.
 - Optional manual peers and relay-host mode implemented.
 - Optional HMAC-SHA256 shared secret implemented.
@@ -56,7 +59,17 @@ The public API lives in
   `kTargetNotFound` when no peer is known instead of reporting a false success
   after a LAN broadcast fallback.
 - Example client included.
-- No STR internals are touched.
+- No installed STR binary is hooked or patched by this package.
+
+The STR developers pointed at the official server scripting guide. That
+confirms server resources can intercept and send chat messages, but it does not
+document a generic binary plugin-message transport. Notes and a private
+experimental server resource are included under:
+
+```text
+docs/STR_INTERNAL_CONNECTION.md
+extras/str-server-resources/strpm-chat-relay/
+```
 
 ## Build
 
@@ -82,6 +95,18 @@ Data/SKSE/Plugins/STRPluginMessagingAPI.ini
 
 Default port: `27990`.
 
+The default transport mode is:
+
+```ini
+[Transport]
+Mode=Auto
+STRBridgeModule=Data\SkyrimTogetherReborn\STRPluginMessagingBridge.dll
+```
+
+`Auto` tries an internal STR bridge first. If the bridge is missing, the UDP
+broker remains active. Use `Mode=STR` only when a private/approved bridge is
+installed and you want startup to fail instead of falling back.
+
 The transport is UDP and best-effort. `kMessageReliable` and
 `kMessageOrdered` are accepted as channel metadata for future compatibility,
 but the current standalone broker does not implement retransmission yet.
@@ -98,4 +123,5 @@ successful.
 - `src/`: client-side loader/helper implementation.
 - `package/`: default Vortex install files.
 - `examples/`: minimal usage sketch.
-- `docs/`: proposal and migration notes for STR developers.
+- `docs/`: proposal, migration notes, and internal STR bridge notes.
+- `extras/str-server-resources/`: optional STR server-side experiments.
