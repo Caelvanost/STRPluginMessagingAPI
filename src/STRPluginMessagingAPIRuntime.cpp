@@ -45,6 +45,7 @@ namespace
         bool enabled{ true };
         bool autoDiscovery{ true };
         bool relayMode{ false };
+        bool requireKnownPeer{ true };
         std::uint16_t localPort{ 27990 };
         std::uint32_t discoveryIntervalMs{ 1500 };
         std::uint32_t peerTimeoutMs{ 15000 };
@@ -377,6 +378,8 @@ namespace
         config.autoDiscovery =
             GetPrivateProfileIntA("Network", "AutoDiscovery", 1, path) != 0;
         config.relayMode = GetPrivateProfileIntA("Network", "RelayMode", 0, path) != 0;
+        config.requireKnownPeer =
+            GetPrivateProfileIntA("Network", "RequireKnownPeer", 1, path) != 0;
         config.localPort = static_cast<std::uint16_t>(
             GetPrivateProfileIntA("Network", "LocalPort", 27990, path));
         config.discoveryIntervalMs =
@@ -634,8 +637,14 @@ namespace
                     return delivered ? STRPM::Result::kOk : STRPM::Result::kTargetNotFound;
                 }
                 if (_config.autoDiscovery) {
-                    SendPacketTo(packet, _broadcast);
-                    return STRPM::Result::kOk;
+                    const bool broadcastSent = SendPacketTo(packet, _broadcast);
+                    if (_config.requireKnownPeer) {
+                        Log("Send target=all has no known peers; broadcast fallback sent only");
+                        return delivered ? STRPM::Result::kOk : STRPM::Result::kTargetNotFound;
+                    }
+                    return broadcastSent || delivered ?
+                        STRPM::Result::kOk :
+                        STRPM::Result::kTransportError;
                 }
                 return delivered ? STRPM::Result::kOk : STRPM::Result::kTargetNotFound;
             }
@@ -651,6 +660,19 @@ namespace
         STRPM::ConnectionID GetLocalConnectionID() const
         {
             return _localConnectionID;
+        }
+
+        STRPM::RuntimeStatus GetRuntimeStatus() const
+        {
+            STRPM::RuntimeStatus status{};
+            status.knownPeerCount = KnownPeerCount();
+            status.configuredPeerCount =
+                static_cast<std::uint32_t>(_config.remotePeers.size());
+            status.autoDiscovery = _config.autoDiscovery ? 1 : 0;
+            status.relayMode = _config.relayMode ? 1 : 0;
+            status.requireKnownPeer = _config.requireKnownPeer ? 1 : 0;
+            status.localPort = _config.localPort;
+            return status;
         }
 
         void SetLogCallback(STRPM::LogCallback callback, void* userData)
@@ -838,6 +860,12 @@ namespace
             }
 
             return result;
+        }
+
+        std::uint32_t KnownPeerCount() const
+        {
+            std::scoped_lock lock(_peerMutex);
+            return static_cast<std::uint32_t>(_peers.size());
         }
 
         bool SendPacketTo(std::string_view packet, const sockaddr_in& destination) const
@@ -1210,6 +1238,18 @@ namespace
         return STRPM::Result::kOk;
     }
 
+    STRPM::Result STRPM_CALL GetRuntimeStatus(
+        STRPM::RuntimeStatus* outStatus)
+    {
+        if (outStatus == nullptr) {
+            return STRPM::Result::kInvalidArgument;
+        }
+
+        Broker::GetSingleton().Start();
+        *outStatus = Broker::GetSingleton().GetRuntimeStatus();
+        return STRPM::Result::kOk;
+    }
+
     STRPM::Result STRPM_CALL SetLogCallback(
         STRPM::LogCallback callback,
         void* userData)
@@ -1237,6 +1277,11 @@ namespace
         &SetLogCallback,
         &SetLocalDisplayName
     };
+
+    const STRPM::DiagnosticsInterface g_diagnostics{
+        STRPM::kDiagnosticsVersion,
+        &GetRuntimeStatus
+    };
 }
 
 extern "C" __declspec(dllexport) bool SKSEPlugin_Query(
@@ -1249,7 +1294,7 @@ extern "C" __declspec(dllexport) bool SKSEPlugin_Query(
 
     pluginInfo->infoVersion = 1;
     pluginInfo->name = "STRPluginMessagingAPI";
-    pluginInfo->version = 2;
+    pluginInfo->version = 3;
     return true;
 }
 
@@ -1274,5 +1319,23 @@ STRPM_EXPORT STRPM::Result STRPM_CALL STR_QueryPluginMessagingInterface(
 
     Broker::GetSingleton().Start();
     *outInterface = &g_interface;
+    return STRPM::Result::kOk;
+}
+
+STRPM_EXPORT STRPM::Result STRPM_CALL STR_QueryPluginMessagingDiagnostics(
+    std::uint32_t requestedVersion,
+    const STRPM::DiagnosticsInterface** outInterface)
+{
+    if (outInterface == nullptr) {
+        return STRPM::Result::kInvalidArgument;
+    }
+
+    *outInterface = nullptr;
+    if (requestedVersion != STRPM::kDiagnosticsVersion) {
+        return STRPM::Result::kUnsupportedVersion;
+    }
+
+    Broker::GetSingleton().Start();
+    *outInterface = &g_diagnostics;
     return STRPM::Result::kOk;
 }

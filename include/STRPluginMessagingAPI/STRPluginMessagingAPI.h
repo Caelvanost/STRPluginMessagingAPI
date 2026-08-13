@@ -14,10 +14,13 @@
 namespace STRPM
 {
     inline constexpr std::uint32_t kInterfaceVersion = 2;
+    inline constexpr std::uint32_t kDiagnosticsVersion = 1;
     inline constexpr std::uint32_t kMaxChannelLength = 96;
     inline constexpr std::uint32_t kMaxPayloadBytes = 24 * 1024;
     inline constexpr char kQueryInterfaceExportName[] =
         "STR_QueryPluginMessagingInterface";
+    inline constexpr char kQueryDiagnosticsExportName[] =
+        "STR_QueryPluginMessagingDiagnostics";
 
     using ConnectionID = std::uint64_t;
 
@@ -120,11 +123,38 @@ namespace STRPM
             const char* displayName);
     };
 
+    struct RuntimeStatus
+    {
+        std::uint32_t version{ kDiagnosticsVersion };
+        std::uint32_t knownPeerCount{ 0 };
+        std::uint32_t configuredPeerCount{ 0 };
+        std::uint32_t autoDiscovery{ 0 };
+        std::uint32_t relayMode{ 0 };
+        std::uint32_t requireKnownPeer{ 0 };
+        std::uint16_t localPort{ 0 };
+        std::uint16_t reserved{ 0 };
+    };
+
+    struct DiagnosticsInterface
+    {
+        std::uint32_t version{ kDiagnosticsVersion };
+
+        Result(STRPM_CALL* getRuntimeStatus)(
+            RuntimeStatus* outStatus);
+    };
+
     using QueryInterfaceFn = Result(STRPM_CALL*)(
         std::uint32_t requestedVersion,
         const Interface** outInterface);
 
+    using QueryDiagnosticsFn = Result(STRPM_CALL*)(
+        std::uint32_t requestedVersion,
+        const DiagnosticsInterface** outInterface);
+
     [[nodiscard]] const Interface* LoadFromModule(
+        const wchar_t* moduleName = L"STRPluginMessagingAPI.dll") noexcept;
+
+    [[nodiscard]] const DiagnosticsInterface* LoadDiagnosticsFromModule(
         const wchar_t* moduleName = L"STRPluginMessagingAPI.dll") noexcept;
 
     [[nodiscard]] const char* ResultToString(Result result) noexcept;

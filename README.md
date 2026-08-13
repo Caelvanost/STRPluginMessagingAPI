@@ -50,6 +50,11 @@ The public API lives in
 - LAN broadcast discovery implemented.
 - Optional manual peers and relay-host mode implemented.
 - Optional HMAC-SHA256 shared secret implemented.
+- Optional diagnostics export implemented:
+  `STR_QueryPluginMessagingDiagnostics`.
+- Strict peer-send mode defaults on, so `send(AllPlayers)` returns
+  `kTargetNotFound` when no peer is known instead of reporting a false success
+  after a LAN broadcast fallback.
 - Example client included.
 - No STR internals are touched.
 
@@ -80,6 +85,12 @@ Default port: `27990`.
 The transport is UDP and best-effort. `kMessageReliable` and
 `kMessageOrdered` are accepted as channel metadata for future compatibility,
 but the current standalone broker does not implement retransmission yet.
+
+`Network/RequireKnownPeer=1` is enabled by default. With that setting, the
+broker still sends one broadcast fallback packet for LAN discovery, but reports
+`kTargetNotFound` to the caller if no peer is known/configured. Set it to `0`
+only when you intentionally want optimistic LAN broadcast sends to count as
+successful.
 
 ## Repository Layout
 

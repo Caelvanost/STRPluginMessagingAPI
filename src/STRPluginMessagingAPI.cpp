@@ -11,22 +11,34 @@
 
 namespace STRPM
 {
+    namespace
+    {
+#if defined(_WIN32)
+        HMODULE LoadPluginModule(const wchar_t* moduleName) noexcept
+        {
+            if (moduleName == nullptr) {
+                return nullptr;
+            }
+
+            auto module = GetModuleHandleW(moduleName);
+            if (module == nullptr) {
+                module = LoadLibraryW(moduleName);
+            }
+            if (module == nullptr) {
+                std::wstring pluginPath = L"Data\\SKSE\\Plugins\\";
+                pluginPath += moduleName;
+                module = LoadLibraryW(pluginPath.c_str());
+            }
+
+            return module;
+        }
+#endif
+    }
+
     const Interface* LoadFromModule(const wchar_t* moduleName) noexcept
     {
 #if defined(_WIN32)
-        if (moduleName == nullptr) {
-            return nullptr;
-        }
-
-        auto module = GetModuleHandleW(moduleName);
-        if (module == nullptr) {
-            module = LoadLibraryW(moduleName);
-        }
-        if (module == nullptr) {
-            std::wstring pluginPath = L"Data\\SKSE\\Plugins\\";
-            pluginPath += moduleName;
-            module = LoadLibraryW(pluginPath.c_str());
-        }
+        const auto module = LoadPluginModule(moduleName);
         if (module == nullptr) {
             return nullptr;
         }
@@ -50,6 +62,41 @@ namespace STRPM
         }
 
         return api;
+#else
+        (void)moduleName;
+        return nullptr;
+#endif
+    }
+
+    const DiagnosticsInterface* LoadDiagnosticsFromModule(
+        const wchar_t* moduleName) noexcept
+    {
+#if defined(_WIN32)
+        const auto module = LoadPluginModule(moduleName);
+        if (module == nullptr) {
+            return nullptr;
+        }
+
+        const auto rawExport =
+            GetProcAddress(module, kQueryDiagnosticsExportName);
+        if (rawExport == nullptr) {
+            return nullptr;
+        }
+
+        const auto queryDiagnostics =
+            reinterpret_cast<QueryDiagnosticsFn>(rawExport);
+
+        const DiagnosticsInterface* diagnostics = nullptr;
+        if (queryDiagnostics(kDiagnosticsVersion, &diagnostics) != Result::kOk) {
+            return nullptr;
+        }
+
+        if (diagnostics == nullptr ||
+            diagnostics->version != kDiagnosticsVersion) {
+            return nullptr;
+        }
+
+        return diagnostics;
 #else
         (void)moduleName;
         return nullptr;
