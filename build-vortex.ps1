@@ -8,7 +8,8 @@ $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $Build = [System.IO.Path]::GetFullPath((Join-Path $Root "..\.build\STRPluginMessagingAPI"))
 $Stage = [System.IO.Path]::GetFullPath((Join-Path $Root "..\.package\STRPluginMessagingAPI-v$Version-Vortex"))
-$Zip = [System.IO.Path]::GetFullPath((Join-Path $Root "..\STRPluginMessagingAPI-v$Version-Vortex.zip"))
+$Dist = [System.IO.Path]::GetFullPath((Join-Path $Root "dist"))
+$Zip = [System.IO.Path]::GetFullPath((Join-Path $Dist "STRPluginMessagingAPI-v$Version-Vortex.zip"))
 $Package = Join-Path $Root "package"
 $Ninja = "C:\Program Files\Microsoft Visual Studio\18\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\Ninja\ninja.exe"
 $VsDevCmd = "C:\Program Files\Microsoft Visual Studio\18\Community\Common7\Tools\VsDevCmd.bat"
@@ -46,6 +47,8 @@ foreach ($Path in @($Stage, $Zip)) {
         Remove-Item -LiteralPath $Path -Recurse -Force
     }
 }
+
+New-Item -ItemType Directory -Force -Path $Dist | Out-Null
 
 Copy-Item -LiteralPath $Package -Destination $Stage -Recurse -Force
 $PluginDir = Join-Path $Stage "Data\SKSE\Plugins"
