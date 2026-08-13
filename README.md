@@ -43,6 +43,7 @@ The public API lives in
 
 - API contract drafted.
 - Windows loader implemented.
+- Prototype SKSE runtime shim implemented.
 - Example client included.
 - No STR internals are touched yet.
 
@@ -54,7 +55,11 @@ cmake --build build --config Release
 ```
 
 The build only validates the standalone API/client helper. It does not produce
-an STR plugin yet.
+STR network relay support yet.
+
+The runtime shim builds as `STRPluginMessagingAPI.dll`. It can be installed
+through Vortex as a normal SKSE plugin, but it only exposes the proposed ABI and
+returns `kNotConnected` for network sends until STR provides a transport bridge.
 
 ## Repository Layout
 

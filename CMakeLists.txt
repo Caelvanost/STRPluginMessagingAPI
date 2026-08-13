@@ -6,21 +6,44 @@ project(
     LANGUAGES CXX
 )
 
-add_library(STRPluginMessagingAPI STATIC
+add_library(STRPluginMessagingAPIClient STATIC
     src/STRPluginMessagingAPI.cpp
 )
 
-target_compile_features(STRPluginMessagingAPI PUBLIC cxx_std_20)
+target_compile_features(STRPluginMessagingAPIClient PUBLIC cxx_std_20)
 
-target_include_directories(STRPluginMessagingAPI
+target_include_directories(STRPluginMessagingAPIClient
     PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 
+set_target_properties(STRPluginMessagingAPIClient
+    PROPERTIES
+        OUTPUT_NAME STRPluginMessagingAPIClient
+)
+
+add_library(STRPluginMessagingAPIRuntime SHARED
+    src/STRPluginMessagingAPIRuntime.cpp
+)
+
+target_compile_features(STRPluginMessagingAPIRuntime PUBLIC cxx_std_20)
+
+target_include_directories(STRPluginMessagingAPIRuntime
+    PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+
+set_target_properties(STRPluginMessagingAPIRuntime
+    PROPERTIES
+        OUTPUT_NAME STRPluginMessagingAPI
+)
+
 if(MSVC)
-    target_compile_options(STRPluginMessagingAPI PRIVATE /W4 /permissive- /EHsc)
+    target_compile_options(STRPluginMessagingAPIClient PRIVATE /W4 /permissive- /EHsc)
+    target_compile_options(STRPluginMessagingAPIRuntime PRIVATE /W4 /permissive- /EHsc)
 else()
-    target_compile_options(STRPluginMessagingAPI PRIVATE -Wall -Wextra -Wpedantic)
+    target_compile_options(STRPluginMessagingAPIClient PRIVATE -Wall -Wextra -Wpedantic)
+    target_compile_options(STRPluginMessagingAPIRuntime PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
 add_executable(STRPluginMessagingAPIExample
@@ -29,5 +52,5 @@ add_executable(STRPluginMessagingAPIExample
 
 target_link_libraries(STRPluginMessagingAPIExample
     PRIVATE
-        STRPluginMessagingAPI
+        STRPluginMessagingAPIClient
 )
