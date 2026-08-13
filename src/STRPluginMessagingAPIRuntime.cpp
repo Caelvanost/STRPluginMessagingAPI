@@ -24,6 +24,10 @@
 #include <unordered_set>
 #include <vector>
 
+#ifndef STRPM_ENABLE_UDP_BACKEND
+#define STRPM_ENABLE_UDP_BACKEND 0
+#endif
+
 namespace
 {
     constexpr std::string_view kDiscoveryPrefix = "STRPM|v1|HELLO|";
@@ -373,6 +377,7 @@ namespace
         return std::string(buffer.data());
     }
 
+#if STRPM_ENABLE_UDP_BACKEND
     std::optional<sockaddr_in> ParseEndpoint(
         std::string_view value,
         std::uint16_t defaultPort)
@@ -419,6 +424,7 @@ namespace
         freeaddrinfo(addresses);
         return result;
     }
+#endif
 
     Config LoadConfig()
     {
@@ -456,14 +462,18 @@ namespace
             config.displayName = GetComputerDisplayName();
         }
 
-        for (int index = 1; index <= 8; ++index) {
-            const auto key = "RemotePeer" + std::to_string(index);
-            const auto value = ReadIniString(path, "Network", key.c_str(), "");
-            const auto endpoint = ParseEndpoint(value, config.localPort);
-            if (endpoint) {
-                config.remotePeers.push_back(*endpoint);
+#if STRPM_ENABLE_UDP_BACKEND
+        if (config.backendMode != STRPM::RuntimeBackendMode::kStrBridge) {
+            for (int index = 1; index <= 8; ++index) {
+                const auto key = "RemotePeer" + std::to_string(index);
+                const auto value = ReadIniString(path, "Network", key.c_str(), "");
+                const auto endpoint = ParseEndpoint(value, config.localPort);
+                if (endpoint) {
+                    config.remotePeers.push_back(*endpoint);
+                }
             }
         }
+#endif
 
         return config;
     }
@@ -511,6 +521,10 @@ namespace
                 }
             }
 
+#if !STRPM_ENABLE_UDP_BACKEND
+            Log("UDP backend is disabled in this STR-only build");
+            return false;
+#else
             WSADATA wsa{};
             if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0) {
                 return false;
@@ -571,6 +585,7 @@ namespace
 
             SendHello();
             return true;
+#endif
         }
 
         void Stop()
@@ -1553,7 +1568,7 @@ extern "C" __declspec(dllexport) bool SKSEPlugin_Query(
 
     pluginInfo->infoVersion = 1;
     pluginInfo->name = "STRPluginMessagingAPI";
-    pluginInfo->version = 4;
+    pluginInfo->version = 5;
     return true;
 }
 

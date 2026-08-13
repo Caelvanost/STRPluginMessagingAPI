@@ -3,9 +3,9 @@
 Shared messaging broker for Skyrim Together Reborn compatibility mods.
 
 The long-term goal is to route these payloads through the existing STR
-connection if the STR team accepts that feature. Until then, this project keeps
-a functional standalone UDP backend and now exposes an experimental bridge slot
-for a private/internal STR transport.
+connection if the STR team accepts that feature. The default private build is
+now STR-only: it does not open the legacy UDP backend or fall back to a
+firewall-visible port.
 
 ## Why
 
@@ -17,9 +17,10 @@ secret handling, peer cache, relay logic, and firewall-visible port:
 - IEDSyncTogether: Immersive Equipment Displays visual equipment slots.
 - TradeTogether: consent-based targeted trade requests.
 
-Those systems all need the same basic thing: send a small namespaced payload to
-one player or to the whole party. This broker centralizes that transport into
-one plugin and one configurable port.
+Those systems all need the same basic thing: send a small namespaced payload
+to one player or to the whole party. This broker centralizes that contract into
+one plugin API while the actual private transport is expected to be provided by
+STR.
 
 ## Runtime Shape
 
@@ -45,19 +46,13 @@ The public API lives in
 
 - API contract drafted.
 - Windows loader implemented.
-- Functional UDP broker implemented.
 - Experimental internal STR transport ABI implemented:
   `STRPM_QueryTransportInterface`.
-- Runtime backend selection implemented:
-  `Auto`, `UDP`, or `STR`.
-- LAN broadcast discovery implemented.
-- Optional manual peers and relay-host mode implemented.
-- Optional HMAC-SHA256 shared secret implemented.
+- Runtime defaults to `STR` mode and requires an internal STR bridge.
+- Legacy UDP broker remains in the source for development builds only, behind
+  `STRPM_ENABLE_UDP_BACKEND=ON`.
 - Optional diagnostics export implemented:
   `STR_QueryPluginMessagingDiagnostics`.
-- Strict peer-send mode defaults on, so `send(AllPlayers)` returns
-  `kTargetNotFound` when no peer is known instead of reporting a false success
-  after a LAN broadcast fallback.
 - Example client included.
 - No installed STR binary is hooked or patched by this package.
 
@@ -78,6 +73,15 @@ cmake -S . -B build
 cmake --build build --config Release
 ```
 
+By default this builds the private STR-only DLL:
+
+```powershell
+cmake -S . -B build -DSTRPM_ENABLE_UDP_BACKEND=OFF
+```
+
+The legacy standalone UDP backend can still be built for local development with
+`-DSTRPM_ENABLE_UDP_BACKEND=ON`, but that is not the packaged default.
+
 Or use the packaged helper:
 
 ```powershell
@@ -93,29 +97,19 @@ Data/SKSE/Plugins/STRPluginMessagingAPI.dll
 Data/SKSE/Plugins/STRPluginMessagingAPI.ini
 ```
 
-Default port: `27990`.
+The packaged private build does not open a UDP port.
 
 The default transport mode is:
 
 ```ini
 [Transport]
-Mode=Auto
+Mode=STR
 STRBridgeModule=Data\SkyrimTogetherReborn\STRPluginMessagingBridge.dll
 ```
 
-`Auto` tries an internal STR bridge first. If the bridge is missing, the UDP
-broker remains active. Use `Mode=STR` only when a private/approved bridge is
-installed and you want startup to fail instead of falling back.
-
-The transport is UDP and best-effort. `kMessageReliable` and
-`kMessageOrdered` are accepted as channel metadata for future compatibility,
-but the current standalone broker does not implement retransmission yet.
-
-`Network/RequireKnownPeer=1` is enabled by default. With that setting, the
-broker still sends one broadcast fallback packet for LAN discovery, but reports
-`kTargetNotFound` to the caller if no peer is known/configured. Set it to `0`
-only when you intentionally want optimistic LAN broadcast sends to count as
-successful.
+If the bridge is missing, `send()` returns `kNotConnected`. This is intentional:
+the private build must not silently fall back to UDP or require port
+forwarding.
 
 ## Repository Layout
 

@@ -2,8 +2,14 @@ cmake_minimum_required(VERSION 3.21)
 
 project(
     STRPluginMessagingAPI
-    VERSION 0.3.0
+    VERSION 0.4.0
     LANGUAGES CXX
+)
+
+option(
+    STRPM_ENABLE_UDP_BACKEND
+    "Build the legacy standalone UDP backend"
+    OFF
 )
 
 add_library(STRPluginMessagingAPIClient STATIC
@@ -32,6 +38,18 @@ target_include_directories(STRPluginMessagingAPIRuntime
     PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
+
+if(STRPM_ENABLE_UDP_BACKEND)
+    target_compile_definitions(STRPluginMessagingAPIRuntime
+        PRIVATE
+            STRPM_ENABLE_UDP_BACKEND=1
+    )
+else()
+    target_compile_definitions(STRPluginMessagingAPIRuntime
+        PRIVATE
+            STRPM_ENABLE_UDP_BACKEND=0
+    )
+endif()
 
 target_link_libraries(STRPluginMessagingAPIRuntime
     PRIVATE

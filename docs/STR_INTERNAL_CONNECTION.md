@@ -6,11 +6,14 @@ This project now has two layers:
 2. `STRPM_QueryTransportInterface`, implemented by whichever transport can carry
    the bytes.
 
-The public mod API stays stable. The runtime chooses the transport:
+The public mod API stays stable. The private packaged runtime is STR-only:
 
-- `Auto`: try an internal STR bridge first, then fall back to UDP.
-- `UDP`: force the standalone UDP broker.
 - `STR`: require an internal STR bridge.
+- If the bridge is missing, `send()` returns `kNotConnected`.
+- No UDP socket is opened by the default build.
+
+The old standalone UDP broker remains available only for development builds
+compiled with `STRPM_ENABLE_UDP_BACKEND=ON`.
 
 ## What the official scripting link changes
 
@@ -53,9 +56,10 @@ payload arrives.
 
 Current runtime behavior:
 
-- `Mode=Auto` uses this bridge when available.
-- If the bridge is missing or fails to start, UDP remains functional.
-- `Mode=STR` fails to start unless the bridge is available.
+- `Mode=STR` is the packaged default.
+- If the bridge is missing or fails to start, UDP is not used.
+- `Mode=Auto` and `Mode=UDP` only matter in custom builds compiled with
+  `STRPM_ENABLE_UDP_BACKEND=ON`.
 
 ### Option B: server scripting chat tunnel
 

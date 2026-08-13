@@ -1,6 +1,6 @@
 param(
     [string]$Configuration = "Release",
-    [string]$Version = "0.3.0"
+    [string]$Version = "0.4.0"
 )
 
 $ErrorActionPreference = "Stop"
@@ -30,7 +30,7 @@ if (-not (Test-Path -LiteralPath $Ninja -PathType Leaf)) {
     throw "Ninja introuvable: $Ninja"
 }
 
-$Command = "`"$VsDevCmd`" -arch=x64 && cmake -S `"$Root`" -B `"$Build`" -G Ninja -DCMAKE_MAKE_PROGRAM=`"$Ninja`" -DCMAKE_BUILD_TYPE=$Configuration && cmake --build `"$Build`" --config $Configuration"
+$Command = "`"$VsDevCmd`" -arch=x64 && cmake -S `"$Root`" -B `"$Build`" -G Ninja -DCMAKE_MAKE_PROGRAM=`"$Ninja`" -DCMAKE_BUILD_TYPE=$Configuration -DSTRPM_ENABLE_UDP_BACKEND=OFF && cmake --build `"$Build`" --config $Configuration"
 cmd.exe /d /s /c $Command
 if ($LASTEXITCODE -ne 0) {
     throw "Compilation CMake echouee avec le code $LASTEXITCODE."
