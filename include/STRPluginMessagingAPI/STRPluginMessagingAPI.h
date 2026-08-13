@@ -13,9 +13,9 @@
 
 namespace STRPM
 {
-    inline constexpr std::uint32_t kInterfaceVersion = 1;
+    inline constexpr std::uint32_t kInterfaceVersion = 2;
     inline constexpr std::uint32_t kMaxChannelLength = 96;
-    inline constexpr std::uint32_t kMaxPayloadBytes = 64 * 1024;
+    inline constexpr std::uint32_t kMaxPayloadBytes = 24 * 1024;
     inline constexpr char kQueryInterfaceExportName[] =
         "STR_QueryPluginMessagingInterface";
 
@@ -32,7 +32,8 @@ namespace STRPM
         kChannelNotRegistered = 6,
         kPayloadTooLarge = 7,
         kRateLimited = 8,
-        kTransportError = 9
+        kTransportError = 9,
+        kTargetNotFound = 10
     };
 
     enum MessageFlags : std::uint32_t
@@ -55,6 +56,7 @@ namespace STRPM
     {
         TargetKind kind{ TargetKind::kAllPlayers };
         ConnectionID connectionID{ 0 };
+        const char* displayName{ nullptr };
     };
 
     struct Sender
@@ -113,6 +115,9 @@ namespace STRPM
         Result(STRPM_CALL* setLogCallback)(
             LogCallback callback,
             void* userData);
+
+        Result(STRPM_CALL* setLocalDisplayName)(
+            const char* displayName);
     };
 
     using QueryInterfaceFn = Result(STRPM_CALL*)(
@@ -120,7 +125,7 @@ namespace STRPM
         const Interface** outInterface);
 
     [[nodiscard]] const Interface* LoadFromModule(
-        const wchar_t* moduleName = L"SkyrimTogetherReborn.dll") noexcept;
+        const wchar_t* moduleName = L"STRPluginMessagingAPI.dll") noexcept;
 
     [[nodiscard]] const char* ResultToString(Result result) noexcept;
 }

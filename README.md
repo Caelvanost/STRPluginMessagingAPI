@@ -1,11 +1,12 @@
 # STR Plugin Messaging API
 
-Prototype API for routing custom SKSE mod payloads through the existing
-Skyrim Together Reborn connection.
+Shared messaging broker for Skyrim Together Reborn compatibility mods.
 
-This repository is intentionally independent from STR for now. It defines the
-client-facing contract I would need for my Skyrim Together compatibility mods,
-plus a tiny loader that can discover the API if STR exposes it later.
+The long-term goal is still to route these payloads through the existing STR
+connection if the STR team accepts that feature. Until then, this project is a
+functional standalone SKSE plugin: it opens one shared UDP port and exposes a
+single API that my other STR-based mods can use instead of each opening their
+own port.
 
 ## Why
 
@@ -18,12 +19,12 @@ secret handling, peer cache, relay logic, and firewall-visible port:
 - TradeTogether: consent-based targeted trade requests.
 
 Those systems all need the same basic thing: send a small namespaced payload to
-one STR player or to the whole party. STR does not need to understand the
-payload; it only needs to relay it safely over the connection it already owns.
+one player or to the whole party. This broker centralizes that transport into
+one plugin and one configurable port.
 
-## Proposed Shape
+## Runtime Shape
 
-STR would expose one C ABI entry point:
+The broker exposes one C ABI entry point:
 
 ```cpp
 STR_QueryPluginMessagingInterface(version, outInterface)
@@ -31,10 +32,12 @@ STR_QueryPluginMessagingInterface(version, outInterface)
 
 Mods would then:
 
-1. Query the interface from the STR module.
+1. Query the interface from `STRPluginMessagingAPI.dll`.
 2. Register a namespaced channel like `chaos.ostim_together.scene.v1`.
 3. Send opaque bytes to a target player, the host/server, or all players.
 4. Receive callbacks with sender identity and payload bytes.
+5. Optionally call `setLocalDisplayName()` once they know the real Skyrim
+   player name.
 
 The public API lives in
 `include/STRPluginMessagingAPI/STRPluginMessagingAPI.h`.
@@ -43,9 +46,12 @@ The public API lives in
 
 - API contract drafted.
 - Windows loader implemented.
-- Prototype SKSE runtime shim implemented.
+- Functional UDP broker implemented.
+- LAN broadcast discovery implemented.
+- Optional manual peers and relay-host mode implemented.
+- Optional HMAC-SHA256 shared secret implemented.
 - Example client included.
-- No STR internals are touched yet.
+- No STR internals are touched.
 
 ## Build
 
@@ -54,16 +60,31 @@ cmake -S . -B build
 cmake --build build --config Release
 ```
 
-The build only validates the standalone API/client helper. It does not produce
-STR network relay support yet.
+Or use the packaged helper:
 
-The runtime shim builds as `STRPluginMessagingAPI.dll`. It can be installed
-through Vortex as a normal SKSE plugin, but it only exposes the proposed ABI and
-returns `kNotConnected` for network sends until STR provides a transport bridge.
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\build-vortex.ps1
+```
+
+## Vortex Layout
+
+The Vortex archive installs:
+
+```text
+Data/SKSE/Plugins/STRPluginMessagingAPI.dll
+Data/SKSE/Plugins/STRPluginMessagingAPI.ini
+```
+
+Default port: `27990`.
+
+The transport is UDP and best-effort. `kMessageReliable` and
+`kMessageOrdered` are accepted as channel metadata for future compatibility,
+but the current standalone broker does not implement retransmission yet.
 
 ## Repository Layout
 
 - `include/STRPluginMessagingAPI/`: public API for mod authors.
 - `src/`: client-side loader/helper implementation.
+- `package/`: default Vortex install files.
 - `examples/`: minimal usage sketch.
 - `docs/`: proposal and migration notes for STR developers.

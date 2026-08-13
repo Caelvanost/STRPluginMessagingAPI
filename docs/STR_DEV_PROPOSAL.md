@@ -80,6 +80,11 @@ unregistration, sending, local connection identity, and optional logging.
 
 See `include/STRPluginMessagingAPI/STRPluginMessagingAPI.h`.
 
+The standalone implementation in this repository currently provides the same
+mod-facing API over one shared UDP broker. That makes it possible to migrate
+mods now, while keeping the future STR-backed transport as an internal broker
+implementation detail.
+
 ## Why This Helps
 
 This would let external compatibility mods reuse STR's already-established

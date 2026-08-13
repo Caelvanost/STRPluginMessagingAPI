@@ -42,6 +42,8 @@ int main()
         return 0;
     }
 
+    api->setLocalDisplayName("ExampleClient");
+
     STRPM::ListenerHandle handle{};
     auto result = api->registerChannel(
         kChannel,
@@ -58,7 +60,8 @@ int main()
     constexpr char payload[] = "scene:start";
     const STRPM::Target target{
         STRPM::TargetKind::kAllPlayers,
-        0
+        0,
+        nullptr
     };
 
     result = api->send(
@@ -66,7 +69,9 @@ int main()
         target,
         payload,
         std::strlen(payload),
-        STRPM::kMessageReliable | STRPM::kMessageOrdered);
+        STRPM::kMessageReliable |
+            STRPM::kMessageOrdered |
+            STRPM::kMessageAllowLoopback);
 
     if (result != STRPM::Result::kOk) {
         std::cout << "send failed: "

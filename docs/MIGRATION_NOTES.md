@@ -1,12 +1,14 @@
 # Migration Notes For My Mods
 
-These notes describe how my current STR-based mods could move from their own
-UDP sockets to the proposed STR plugin messaging API.
+These notes describe how my current STR-based mods can move from their own UDP
+sockets to `STRPluginMessagingAPI`.
 
 ## Shared Plan
 
 Each mod can keep its existing payload format at first and only replace the
-transport layer.
+transport layer. The current broker is already functional over one shared UDP
+port. If STR later exposes an official relay API, the broker can become the
+adapter to STR's connection without changing every mod again.
 
 Current transport responsibilities to remove later:
 
@@ -21,9 +23,11 @@ Replacement responsibilities:
 
 - Register one or more STR plugin channels.
 - Send payloads to `kAllPlayers` or a specific `ConnectionID`.
+- For name-based targeting, set `Target::displayName` with
+  `TargetKind::kPlayer`.
 - Use callback payloads as the existing packet entry point.
-- Resolve the sender's remote actor using sender display name first, then
-  connection ID once STR exposes a stable actor mapping.
+- Call `setLocalDisplayName()` after the mod can read the Skyrim player name.
+- Resolve the sender's remote actor using `Sender::displayName` first.
 
 ## OStimTogether
 
@@ -61,6 +65,5 @@ inside the mod.
 
 ## Fallback
 
-Until STR exposes the API, each mod should keep its current UDP transport. The
-future migration can choose the STR transport first and fall back to UDP only
-when the API is missing or too old.
+During migration, each mod can choose the broker first and fall back to its
+current per-mod UDP transport only when the API is missing or too old.

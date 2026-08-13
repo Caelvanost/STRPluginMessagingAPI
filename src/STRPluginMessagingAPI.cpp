@@ -1,5 +1,7 @@
 #include "STRPluginMessagingAPI/STRPluginMessagingAPI.h"
 
+#include <string>
+
 #if defined(_WIN32)
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -16,7 +18,15 @@ namespace STRPM
             return nullptr;
         }
 
-        const auto module = GetModuleHandleW(moduleName);
+        auto module = GetModuleHandleW(moduleName);
+        if (module == nullptr) {
+            module = LoadLibraryW(moduleName);
+        }
+        if (module == nullptr) {
+            std::wstring pluginPath = L"Data\\SKSE\\Plugins\\";
+            pluginPath += moduleName;
+            module = LoadLibraryW(pluginPath.c_str());
+        }
         if (module == nullptr) {
             return nullptr;
         }
@@ -69,6 +79,8 @@ namespace STRPM
             return "rate limited";
         case Result::kTransportError:
             return "transport error";
+        case Result::kTargetNotFound:
+            return "target not found";
         default:
             return "unknown result";
         }

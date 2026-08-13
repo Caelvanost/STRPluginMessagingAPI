@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.21)
 
 project(
     STRPluginMessagingAPI
-    VERSION 0.1.0
+    VERSION 0.2.0
     LANGUAGES CXX
 )
 
@@ -31,6 +31,12 @@ target_compile_features(STRPluginMessagingAPIRuntime PUBLIC cxx_std_20)
 target_include_directories(STRPluginMessagingAPIRuntime
     PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+
+target_link_libraries(STRPluginMessagingAPIRuntime
+    PRIVATE
+        Ws2_32
+        Bcrypt
 )
 
 set_target_properties(STRPluginMessagingAPIRuntime
