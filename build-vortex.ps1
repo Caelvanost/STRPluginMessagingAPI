@@ -31,15 +31,18 @@ if (-not (Test-Path -LiteralPath $Ninja -PathType Leaf)) {
     throw "Ninja introuvable: $Ninja"
 }
 
-$Command = "`"$VsDevCmd`" -arch=x64 && cmake -S `"$Root`" -B `"$Build`" -G Ninja -DCMAKE_MAKE_PROGRAM=`"$Ninja`" -DCMAKE_BUILD_TYPE=$Configuration -DSTRPM_ENABLE_UDP_BACKEND=OFF && cmake --build `"$Build`" --config $Configuration"
+$Command = "`"$VsDevCmd`" -arch=x64 && cmake -S `"$Root`" -B `"$Build`" -G Ninja -DCMAKE_MAKE_PROGRAM=`"$Ninja`" -DCMAKE_BUILD_TYPE=$Configuration -DSTRPM_ENABLE_UDP_BACKEND=OFF -DSTRPM_BUILD_STR180_BRIDGE_PROBE=ON && cmake --build `"$Build`" --config $Configuration"
 cmd.exe /d /s /c $Command
 if ($LASTEXITCODE -ne 0) {
     throw "Compilation CMake echouee avec le code $LASTEXITCODE."
 }
 
 $Dll = Join-Path $Build "STRPluginMessagingAPI.dll"
-if (-not (Test-Path -LiteralPath $Dll -PathType Leaf)) {
-    throw "DLL introuvable apres compilation: $Dll"
+$BridgeDll = Join-Path $Build "STRPluginMessagingBridge.dll"
+foreach ($RequiredDll in @($Dll, $BridgeDll)) {
+    if (-not (Test-Path -LiteralPath $RequiredDll -PathType Leaf)) {
+        throw "DLL introuvable apres compilation: $RequiredDll"
+    }
 }
 
 foreach ($Path in @($Stage, $Zip)) {
@@ -54,6 +57,7 @@ Copy-Item -LiteralPath $Package -Destination $Stage -Recurse -Force
 $PluginDir = Join-Path $Stage "Data\SKSE\Plugins"
 New-Item -ItemType Directory -Force -Path $PluginDir | Out-Null
 Copy-Item -LiteralPath $Dll -Destination (Join-Path $PluginDir "STRPluginMessagingAPI.dll") -Force
+Copy-Item -LiteralPath $BridgeDll -Destination (Join-Path $PluginDir "STRPluginMessagingBridge.dll") -Force
 
 Compress-Archive `
     -Path (Join-Path $Stage "*") `
@@ -67,6 +71,7 @@ try {
     $Entries = @($Archive.Entries | ForEach-Object { $_.FullName.Replace('\', '/') })
     foreach ($RequiredEntry in @(
         "Data/SKSE/Plugins/STRPluginMessagingAPI.dll",
+        "Data/SKSE/Plugins/STRPluginMessagingBridge.dll",
         "Data/SKSE/Plugins/STRPluginMessagingAPI.ini"
     )) {
         if ($Entries -notcontains $RequiredEntry) {
