@@ -55,9 +55,11 @@ New-Item -ItemType Directory -Force -Path $Dist | Out-Null
 
 Copy-Item -LiteralPath $Package -Destination $Stage -Recurse -Force
 $PluginDir = Join-Path $Stage "Data\SKSE\Plugins"
+$BridgeDir = Join-Path $Stage "Data\SkyrimTogetherReborn"
 New-Item -ItemType Directory -Force -Path $PluginDir | Out-Null
+New-Item -ItemType Directory -Force -Path $BridgeDir | Out-Null
 Copy-Item -LiteralPath $Dll -Destination (Join-Path $PluginDir "STRPluginMessagingAPI.dll") -Force
-Copy-Item -LiteralPath $BridgeDll -Destination (Join-Path $PluginDir "STRPluginMessagingBridge.dll") -Force
+Copy-Item -LiteralPath $BridgeDll -Destination (Join-Path $BridgeDir "STRPluginMessagingBridge.dll") -Force
 
 Compress-Archive `
     -Path (Join-Path $Stage "*") `
@@ -71,8 +73,8 @@ try {
     $Entries = @($Archive.Entries | ForEach-Object { $_.FullName.Replace('\', '/') })
     foreach ($RequiredEntry in @(
         "Data/SKSE/Plugins/STRPluginMessagingAPI.dll",
-        "Data/SKSE/Plugins/STRPluginMessagingBridge.dll",
-        "Data/SKSE/Plugins/STRPluginMessagingAPI.ini"
+        "Data/SKSE/Plugins/STRPluginMessagingAPI.ini",
+        "Data/SkyrimTogetherReborn/STRPluginMessagingBridge.dll"
     )) {
         if ($Entries -notcontains $RequiredEntry) {
             throw "Entree absente de l'archive: $RequiredEntry"
