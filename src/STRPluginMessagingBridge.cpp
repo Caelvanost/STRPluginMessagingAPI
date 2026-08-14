@@ -21,9 +21,12 @@ namespace
 {
     constexpr char kTargetBuild[] = "Skyrim Together Reborn 1.8.0";
     constexpr char kSendChatAnchor[] = "Send chat message of type {}: '{}' ";
+    constexpr std::uint8_t kSendChatOpcode = 38;
+    constexpr std::uint64_t kGlobalChatMessageType = 1;
     constexpr std::size_t kMaxEnvelopeChars = 3500;
     constexpr std::size_t kMaxFragments = 64;
     constexpr std::size_t kMaxCallDistanceAfterAnchor = 0x200;
+    constexpr std::size_t kExpectedClientMessageOpcodeOffset = 16;
 
     struct MemorySpan
     {
@@ -47,7 +50,32 @@ namespace
         std::size_t distanceAfterAnchor{ 0 };
     };
 
+    // Layout shadows for TiltedCore v0.2.7. TransportService::Send creates a
+    // Buffer(1 << 16) and passes Buffer::Writer& into ClientMessage::Serialize().
+    // We only touch already allocated storage, so no TiltedCore allocator calls
+    // are needed from the bridge.
+    struct ShadowBuffer
+    {
+        void* vtable{ nullptr };
+        void* allocator{ nullptr };
+        std::uint8_t* data{ nullptr };
+        std::size_t size{ 0 };
+    };
+
+    struct ShadowWriter
+    {
+        std::size_t bitPosition{ 0 };
+        ShadowBuffer* buffer{ nullptr };
+    };
+
+    struct ShadowReader
+    {
+        std::size_t bitPosition{ 0 };
+        ShadowBuffer* buffer{ nullptr };
+    };
+
     std::mutex g_lock;
+    std::mutex g_sendLock;
     STRPM::ReceiveCallback g_callback = nullptr;
     void* g_userData = nullptr;
     std::string g_displayName;
@@ -59,6 +87,13 @@ namespace
     std::vector<std::uintptr_t> g_xrefs;
     std::vector<CallSite> g_processChatCalls;
     std::optional<FunctionBounds> g_processChatBounds;
+    std::uintptr_t g_transportSendAddress = 0;
+
+    std::atomic<void*> g_transportInstance{ nullptr };
+    std::atomic<bool> g_breakpointArmed{ false };
+    std::atomic<bool> g_transportCaptured{ false };
+    std::uint8_t g_originalTransportByte = 0;
+    PVOID g_vectoredHandler = nullptr;
 
     void Log(const char* fmt, ...)
     {
@@ -115,7 +150,7 @@ namespace
 
         char path[MAX_PATH]{};
         const auto module = reinterpret_cast<HMODULE>(allocationBase);
-        if (GetModuleFileNameA(module, path, static_cast<DWORD>(std::size(path))) == 0)
+        if (GetModuleFileNameA(module, path, MAX_PATH) == 0)
             return nullptr;
         return module;
     }
@@ -131,10 +166,14 @@ namespace
             return "<private-mapped>";
 
         char path[MAX_PATH]{};
-        if (GetModuleFileNameA(module, path, static_cast<DWORD>(std::size(path))) == 0)
+        if (GetModuleFileNameA(module, path, MAX_PATH) == 0)
             return "<module>";
 
-        const char* slash = std::max(std::strrchr(path, '\\'), std::strrchr(path, '/'));
+        const char* slashBack = std::strrchr(path, '\\');
+        const char* slashForward = std::strrchr(path, '/');
+        const char* slash = slashBack;
+        if (!slash || (slashForward && slashForward > slash))
+            slash = slashForward;
         return slash ? slash + 1 : path;
     }
 
@@ -281,25 +320,39 @@ namespace
         return result;
     }
 
+    bool FunctionContainsImmediate32(const FunctionBounds& bounds, std::uint32_t value)
+    {
+        const auto size = bounds.end - bounds.begin;
+        if (size < sizeof(value) || size > 0x4000)
+            return false;
+
+        const auto* bytes = reinterpret_cast<const std::uint8_t*>(bounds.begin);
+        std::uint8_t needle[sizeof(value)]{};
+        std::memcpy(needle, &value, sizeof(value));
+        for (std::size_t i = 0; i + sizeof(value) <= size; ++i)
+        {
+            if (std::memcmp(bytes + i, needle, sizeof(value)) == 0)
+                return true;
+        }
+        return false;
+    }
+
     bool ResolveProcessChatMessage()
     {
         g_processChatBounds.reset();
         g_processChatCalls.clear();
         g_anchorAddresses.clear();
         g_xrefs.clear();
+        g_transportSendAddress = 0;
 
         EnumerateMemory();
         FindAnchorCopies();
         FindRipRelativeXrefs();
 
-        // The public 1.8.0 executable is packed. At runtime the actual client code
-        // may live in a private mapped image rather than the raw PE sections, so we
-        // deliberately resolve from process memory instead of .text/.rdata.
         std::vector<std::uintptr_t> viableXrefs;
         for (const auto xref : g_xrefs)
         {
-            const auto bounds = GetFunctionBounds(xref);
-            if (bounds)
+            if (GetFunctionBounds(xref))
                 viableXrefs.push_back(xref);
         }
 
@@ -316,10 +369,264 @@ namespace
             return false;
 
         g_processChatCalls = EnumerateDirectCalls(*g_processChatBounds, xref);
-        std::ranges::sort(g_processChatCalls, [](const CallSite& lhs, const CallSite& rhs) {
+        std::sort(g_processChatCalls.begin(), g_processChatCalls.end(), [](const CallSite& lhs, const CallSite& rhs) {
             return lhs.site < rhs.site;
         });
-        return !g_processChatCalls.empty();
+
+        std::vector<std::uintptr_t> transportCandidates;
+        for (const auto& call : g_processChatCalls)
+        {
+            if (call.site <= xref || call.distanceAfterAnchor > kMaxCallDistanceAfterAnchor)
+                continue;
+
+            const auto targetBounds = GetFunctionBounds(call.target);
+            if (!targetBounds)
+                continue;
+
+            // TransportService::Send in STR 1.8.0 constructs Buffer(1 << 16).
+            // Requiring the 0x10000 immediate sharply distinguishes it from the
+            // nearby spdlog/fmt and string cleanup calls.
+            if (!FunctionContainsImmediate32(*targetBounds, 0x00010000u))
+                continue;
+
+            transportCandidates.push_back(call.target);
+        }
+
+        std::sort(transportCandidates.begin(), transportCandidates.end());
+        transportCandidates.erase(
+            std::unique(transportCandidates.begin(), transportCandidates.end()),
+            transportCandidates.end());
+
+        if (transportCandidates.size() != 1)
+        {
+            Log("resolver rejected transport send: expected one 0x10000-bearing candidate, found %zu", transportCandidates.size());
+            return false;
+        }
+
+        g_transportSendAddress = transportCandidates.front();
+        return true;
+    }
+
+    bool PatchByte(std::uintptr_t address, std::uint8_t value)
+    {
+        DWORD oldProtect = 0;
+        if (!VirtualProtect(reinterpret_cast<void*>(address), 1, PAGE_EXECUTE_READWRITE, &oldProtect))
+            return false;
+
+        *reinterpret_cast<volatile std::uint8_t*>(address) = value;
+        FlushInstructionCache(GetCurrentProcess(), reinterpret_cast<void*>(address), 1);
+
+        DWORD ignored = 0;
+        VirtualProtect(reinterpret_cast<void*>(address), 1, oldProtect, &ignored);
+        return true;
+    }
+
+    void RestoreCaptureBreakpoint()
+    {
+        if (!g_breakpointArmed.exchange(false))
+            return;
+        PatchByte(g_transportSendAddress, g_originalTransportByte);
+    }
+
+    LONG CALLBACK CaptureTransportExceptionHandler(EXCEPTION_POINTERS* exceptionInfo)
+    {
+        if (!exceptionInfo || !exceptionInfo->ExceptionRecord || !exceptionInfo->ContextRecord)
+            return EXCEPTION_CONTINUE_SEARCH;
+
+        if (exceptionInfo->ExceptionRecord->ExceptionCode != EXCEPTION_BREAKPOINT ||
+            reinterpret_cast<std::uintptr_t>(exceptionInfo->ExceptionRecord->ExceptionAddress) != g_transportSendAddress ||
+            !g_breakpointArmed.load())
+        {
+            return EXCEPTION_CONTINUE_SEARCH;
+        }
+
+        g_transportInstance.store(reinterpret_cast<void*>(exceptionInfo->ContextRecord->Rcx));
+        g_transportCaptured.store(true);
+        RestoreCaptureBreakpoint();
+
+        // INT3 advances RIP by one byte. We restored the original first byte, so
+        // restart execution at the function entry and let STR continue normally.
+        exceptionInfo->ContextRecord->Rip = static_cast<DWORD64>(g_transportSendAddress);
+        return EXCEPTION_CONTINUE_EXECUTION;
+    }
+
+    bool ArmTransportCaptureBreakpoint()
+    {
+        if (g_transportSendAddress == 0 || g_breakpointArmed.load())
+            return false;
+
+        if (!g_vectoredHandler)
+        {
+            g_vectoredHandler = AddVectoredExceptionHandler(1, &CaptureTransportExceptionHandler);
+            if (!g_vectoredHandler)
+                return false;
+        }
+
+        g_originalTransportByte = *reinterpret_cast<const std::uint8_t*>(g_transportSendAddress);
+        if (!PatchByte(g_transportSendAddress, 0xCC))
+            return false;
+
+        g_breakpointArmed.store(true);
+        return true;
+    }
+
+    bool ShadowWriteBits(ShadowWriter& writer, std::uint64_t data, std::size_t count)
+    {
+        if (!writer.buffer || !writer.buffer->data || count > 64)
+            return false;
+
+        const auto bitIndex = writer.bitPosition & 0x7;
+        const auto countOffset = count + bitIndex;
+        auto bytesToWrite = ((countOffset & ~std::size_t(0x7)) + ((countOffset & 0x7) != 0 ? 8 : 0)) >> 3;
+        const auto bytePosition = writer.bitPosition / 8;
+        if (bytePosition + bytesToWrite > writer.buffer->size)
+            return false;
+
+        auto* location = writer.buffer->data + bytePosition;
+        if (bitIndex != 0)
+        {
+            auto bitsToWrite = 8 - bitIndex;
+            if (bitsToWrite > count)
+                bitsToWrite = count;
+
+            auto workByte = *location;
+            const auto workByteMask = (1u << bitIndex) - 1u;
+            workByte &= static_cast<std::uint8_t>(workByteMask);
+
+            const auto dataMask = bitsToWrite == 8 ? 0xFFu : ((1u << bitsToWrite) - 1u);
+            *location = static_cast<std::uint8_t>((data & dataMask) << bitIndex);
+            *location |= workByte;
+
+            ++location;
+            --bytesToWrite;
+            data >>= bitsToWrite;
+        }
+
+        const auto* direct = reinterpret_cast<const std::uint8_t*>(&data);
+        std::copy(direct, direct + bytesToWrite, location);
+        writer.bitPosition += count;
+        return true;
+    }
+
+    bool ShadowWriteBytes(ShadowWriter& writer, const std::uint8_t* source, std::size_t count)
+    {
+        if (!writer.buffer || !writer.buffer->data || (!source && count != 0))
+            return false;
+
+        writer.bitPosition = (writer.bitPosition & ~std::size_t(0x7)) +
+                             ((writer.bitPosition & 0x7) != 0 ? 8 : 0);
+        const auto bytePosition = writer.bitPosition / 8;
+        if (bytePosition + count > writer.buffer->size)
+            return false;
+
+        if (count != 0)
+            std::copy(source, source + count, writer.buffer->data + bytePosition);
+        writer.bitPosition += count * 8;
+        return true;
+    }
+
+    bool ShadowWriteVarInt(ShadowWriter& writer, std::uint64_t value)
+    {
+        do
+        {
+            if (!ShadowWriteBits(writer, value, 7))
+                return false;
+            value >>= 7;
+            if (!ShadowWriteBits(writer, value != 0 ? 1u : 0u, 1))
+                return false;
+        } while (value > 0);
+        return true;
+    }
+
+    class BridgeChatMessage
+    {
+    public:
+        explicit BridgeChatMessage(const std::string& text) noexcept
+            : text_(&text)
+        {
+        }
+
+        virtual ~BridgeChatMessage() = default;
+
+        virtual void SerializeRaw(ShadowWriter& writer) const noexcept
+        {
+            if (!text_ || text_->size() > 0xFFFF)
+                return;
+
+            if (!ShadowWriteVarInt(writer, kGlobalChatMessageType))
+                return;
+            if (!ShadowWriteVarInt(writer, static_cast<std::uint16_t>(text_->size())))
+                return;
+            ShadowWriteBytes(
+                writer,
+                reinterpret_cast<const std::uint8_t*>(text_->data()),
+                text_->size());
+        }
+
+        virtual void SerializeDifferential(ShadowWriter&) const noexcept
+        {
+        }
+
+        virtual void DeserializeRaw(ShadowReader&) noexcept
+        {
+        }
+
+        virtual void DeserializeDifferential(ShadowReader&) noexcept
+        {
+        }
+
+        bool HasExpectedClientMessageLayout() const noexcept
+        {
+            const auto* bytes = reinterpret_cast<const std::uint8_t*>(this);
+            return bytes[kExpectedClientMessageOpcodeOffset] == kSendChatOpcode;
+        }
+
+    private:
+        // Matches ClientMessage : AllocatorCompatible on MSVC x64:
+        // [0x00] vptr, [0x08] allocator pointer, [0x10] ClientOpcode.
+        void* allocator_{ nullptr };
+        std::uint8_t opcode_{ kSendChatOpcode };
+        std::uint8_t padding_[7]{};
+        const std::string* text_{ nullptr };
+    };
+
+    bool InvokeTransportSendUnsafe(void* transport, const void* message) noexcept
+    {
+        if (!transport || !message || g_transportSendAddress == 0)
+            return false;
+
+        using TransportSendFn = bool(__fastcall*)(void*, const void*);
+        const auto function = reinterpret_cast<TransportSendFn>(g_transportSendAddress);
+
+#if defined(_MSC_VER)
+        __try
+        {
+            return function(transport, message);
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER)
+        {
+            return false;
+        }
+#else
+        return function(transport, message);
+#endif
+    }
+
+    bool SendEnvelopeThroughSTR(const std::string& envelope)
+    {
+        auto* transport = g_transportInstance.load();
+        if (!transport || g_transportSendAddress == 0)
+            return false;
+
+        BridgeChatMessage message(envelope);
+        if (!message.HasExpectedClientMessageLayout())
+        {
+            Log("bridge ABI guard failed: ClientMessage opcode is not at expected offset 0x%zX", kExpectedClientMessageOpcodeOffset);
+            return false;
+        }
+
+        std::scoped_lock lock(g_sendLock);
+        return InvokeTransportSendUnsafe(transport, &message);
     }
 
     char HexDigit(unsigned value)
@@ -364,8 +671,6 @@ namespace
         case STRPM::TargetKind::kAllPlayers:
             return std::string("all");
         case STRPM::TargetKind::kHost:
-            // The documented STR server scripting API does not expose a stable
-            // host lookup. Do not silently turn host into broadcast.
             return std::nullopt;
         default:
             return std::nullopt;
@@ -397,9 +702,6 @@ namespace
                << "|target=" << *targetField
                << "|flags=" << flags;
 
-        // Reserve enough room for part/parts/payload fields and decimal fragment
-        // counters. Keeping envelopes well below the server's 4096-character cap
-        // gives room for authenticated sender metadata appended by the Lua relay.
         const std::string fixedPrefix = prefix.str();
         constexpr std::size_t overheadReserve = 96;
         if (fixedPrefix.size() + overheadReserve >= kMaxEnvelopeChars)
@@ -414,7 +716,8 @@ namespace
         for (std::size_t index = 0; index < fragmentCount; ++index)
         {
             const auto offset = index * payloadCharsPerFragment;
-            const auto count = std::min(payloadCharsPerFragment, payloadHex.size() - std::min(offset, payloadHex.size()));
+            const auto remaining = payloadHex.size() - std::min(offset, payloadHex.size());
+            const auto count = std::min(payloadCharsPerFragment, remaining);
 
             std::ostringstream envelope;
             envelope << fixedPrefix
@@ -463,27 +766,34 @@ namespace
             for (std::size_t i = 0; i < g_processChatCalls.size(); ++i)
             {
                 const auto& call = g_processChatCalls[i];
-                const bool nearAfterAnchor = call.site > g_xrefs.front() &&
-                                             call.distanceAfterAnchor <= kMaxCallDistanceAfterAnchor;
-                Log("  call[%zu] site=0x%llX target=0x%llX distanceAfterAnchor=0x%zX targetModule=%s%s",
+                const auto targetBounds = GetFunctionBounds(call.target);
+                const bool has64k = targetBounds && FunctionContainsImmediate32(*targetBounds, 0x00010000u);
+                Log("  call[%zu] site=0x%llX target=0x%llX distanceAfterAnchor=0x%zX targetModule=%s%s%s",
                     i,
                     static_cast<unsigned long long>(call.site),
                     static_cast<unsigned long long>(call.target),
                     call.distanceAfterAnchor,
                     ModuleNameForAddress(call.target).c_str(),
-                    nearAfterAnchor ? " [near-after-anchor]" : "");
+                    call.site > g_xrefs.front() && call.distanceAfterAnchor <= kMaxCallDistanceAfterAnchor ? " [near-after-anchor]" : "",
+                    has64k ? " [contains-0x10000]" : "");
             }
         }
 
-        Log("resolver status: %s", resolved
-            ? "ProcessChatMessage located in mapped runtime; native send dispatch remains fail-safe until target ABI is validated"
-            : "not resolved");
+        if (g_transportSendAddress)
+        {
+            Log("TransportService::Send candidate: 0x%llX module=%s",
+                static_cast<unsigned long long>(g_transportSendAddress),
+                ModuleNameForAddress(g_transportSendAddress).c_str());
+        }
+
+        Log("resolver status: %s", resolved ? "send target resolved" : "not resolved");
     }
 
     STRPM::Result STRPM_CALL Start(STRPM::ReceiveCallback callback, void* userData)
     {
         if (!callback)
             return STRPM::Result::kInvalidArgument;
+
         {
             std::scoped_lock lock(g_lock);
             g_callback = callback;
@@ -491,11 +801,34 @@ namespace
         }
 
         ProbeSTR180();
-        return STRPM::Result::kNotConnected;
+        if (g_transportSendAddress == 0)
+            return STRPM::Result::kNotConnected;
+
+        if (g_transportInstance.load())
+            return STRPM::Result::kOk;
+
+        if (!ArmTransportCaptureBreakpoint())
+        {
+            Log("failed to arm temporary TransportService::Send capture breakpoint");
+            return STRPM::Result::kNotConnected;
+        }
+
+        Log("temporary transport capture breakpoint armed; waiting for first natural STR send");
+        return STRPM::Result::kOk;
     }
 
     STRPM::Result STRPM_CALL Stop()
     {
+        RestoreCaptureBreakpoint();
+        if (g_vectoredHandler)
+        {
+            RemoveVectoredExceptionHandler(g_vectoredHandler);
+            g_vectoredHandler = nullptr;
+        }
+
+        g_transportInstance.store(nullptr);
+        g_transportCaptured.store(false);
+
         std::scoped_lock lock(g_lock);
         g_callback = nullptr;
         g_userData = nullptr;
@@ -516,29 +849,37 @@ namespace
         if (target.kind == STRPM::TargetKind::kHost)
             return STRPM::Result::kTargetNotFound;
 
+        if (!g_transportInstance.load())
+            return STRPM::Result::kNotConnected;
+
         const auto sequence = g_sequence.fetch_add(1);
         const auto envelopes = BuildEnvelopes(channel, target, data, size, flags, sequence);
         if (envelopes.empty())
             return STRPM::Result::kInvalidArgument;
 
-        Log("prepared STRPM message seq=%llu channel=%s size=%zu fragments=%zu targetKind=%u",
+        Log("sending STRPM message seq=%llu channel=%s size=%zu fragments=%zu targetKind=%u",
             static_cast<unsigned long long>(sequence),
             channel,
             size,
             envelopes.size(),
             static_cast<unsigned>(target.kind));
-        for (std::size_t i = 0; i < envelopes.size(); ++i)
-            Log("  envelope[%zu] chars=%zu", i, envelopes[i].size());
 
-        // Envelope generation is now complete. The final step is to feed each
-        // envelope into STR's existing chat send path after the 1.8.0 runtime
-        // call target and its owning TransportService instance are validated.
-        // Until then, fail closed rather than call an uncertain address.
-        return STRPM::Result::kNotConnected;
+        for (std::size_t i = 0; i < envelopes.size(); ++i)
+        {
+            if (!SendEnvelopeThroughSTR(envelopes[i]))
+            {
+                Log("native STR chat send failed at fragment %zu/%zu", i + 1, envelopes.size());
+                return STRPM::Result::kTransportError;
+            }
+        }
+
+        return STRPM::Result::kOk;
     }
 
     STRPM::Result STRPM_CALL GetLocalConnectionID(STRPM::ConnectionID*)
     {
+        // Local player ID resolution is separate from the send bootstrap and is
+        // intentionally left fail-safe until the ConnectedEvent path is resolved.
         return STRPM::Result::kNotConnected;
     }
 
