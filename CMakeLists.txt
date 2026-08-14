@@ -14,7 +14,7 @@ option(
 
 option(
     STRPM_BUILD_STR180_BRIDGE_PROBE
-    "Build the Skyrim Together Reborn 1.8.0 chat bridge probe"
+    "Build the Skyrim Together Reborn 1.8.0 chat bridge"
     ON
 )
 
@@ -71,11 +71,13 @@ set_target_properties(STRPluginMessagingAPIRuntime
 if(STRPM_BUILD_STR180_BRIDGE_PROBE)
     add_library(STRPluginMessagingBridge SHARED
         src/STRPluginMessagingBridge.cpp
+        src/STRPluginMessagingBridgeReceive.cpp
     )
     target_compile_features(STRPluginMessagingBridge PUBLIC cxx_std_20)
     target_include_directories(STRPluginMessagingBridge
         PRIVATE
             ${CMAKE_CURRENT_SOURCE_DIR}/include
+            ${CMAKE_CURRENT_SOURCE_DIR}/src
     )
     set_target_properties(STRPluginMessagingBridge
         PROPERTIES
