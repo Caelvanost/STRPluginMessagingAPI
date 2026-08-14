@@ -5,7 +5,7 @@
 #endif
 #include <Windows.h>
 
-#include <array>
+#include <cstdarg>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -111,8 +111,6 @@ namespace
                 const auto* code = reinterpret_cast<const std::uint8_t*>(base);
                 for (std::size_t i = 0; i + 7 <= size; ++i)
                 {
-                    // x64 LEA reg,[RIP+disp32]. The ModRM values below cover RCX/RDX/R8/R9-style
-                    // compiler temporaries commonly used for string arguments.
                     if (code[i] != 0x48 || code[i + 1] != 0x8D)
                         continue;
                     const std::uint8_t modrm = code[i + 2];
@@ -159,8 +157,6 @@ namespace
             g_userData = userData;
         }
         ProbeSTR180();
-        // The probe deliberately does not claim connectivity until the send and receive
-        // entry points have both been resolved and validated for the public 1.8.0 binary.
         return STRPM::Result::kNotConnected;
     }
 
