@@ -33,6 +33,48 @@ The practical stock-client implementation is a thin, version-specific bridge tha
 All version-specific discovery/hooking must stay in `STRPluginMessagingBridge.dll`; the
 public STRPM API and the server resource remain version-independent.
 
+## STR 1.8.0 resolver
+
+The first supported target is the public `v1.8.0` source tag at commit
+`9c23efa422bbc1e5c06eef5522ca73971a513e35`.
+
+The bridge intentionally does not contain absolute executable addresses. At runtime it:
+
+1. Locates the loaded `SkyrimTogether.exe` PE image.
+2. Restricts string scanning to its `.rdata` section and code scanning to `.text`.
+3. Finds the unique 1.8.0 logging literal used inside `OverlayClient::ProcessChatMessage()`:
+   `Send chat message of type {}: '{}' `.
+4. Resolves the RIP-relative `LEA` instruction that references that literal.
+5. Calls `RtlLookupFunctionEntry()` on the xref to obtain the function's exact x64 unwind
+   bounds from the executable `.pdata` metadata instead of guessing a prologue.
+6. Enumerates direct `CALL rel32` targets inside those bounds.
+
+The bridge remains deliberately unarmed until the actual public binary confirms which
+post-log call target is `TransportService::Send()` and until the incoming chat handler
+has been independently resolved. A failed or ambiguous resolution returns
+`kNotConnected`; it never guesses an address.
+
+The diagnostic output is written to:
+
+```text
+Data\SKSE\Plugins\STRPluginMessagingBridge.log
+```
+
+A successful outgoing-path probe should include entries similar to:
+
+```text
+send-chat anchor copies: 1
+send-chat RIP xrefs: 1
+ProcessChatMessage candidate: 0x...-0x... (RVA 0x...-0x...)
+direct CALL candidates in ProcessChatMessage: N
+  call[0] site=... target=...
+  ...
+resolver status: ProcessChatMessage located; transport call still intentionally unarmed
+```
+
+RVA values are logged specifically so results can be compared across machines despite
+ASLR.
+
 ## Envelope v2
 
 Each transport fragment is an ASCII chat payload:
