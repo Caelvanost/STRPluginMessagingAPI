@@ -6,29 +6,32 @@
 #include <Windows.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cstdarg>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <mutex>
 #include <optional>
+#include <sstream>
 #include <string>
 #include <vector>
 
 namespace
 {
     constexpr char kTargetBuild[] = "Skyrim Together Reborn 1.8.0";
-    constexpr char kTargetModule[] = "SkyrimTogether.exe";
     constexpr char kSendChatAnchor[] = "Send chat message of type {}: '{}' ";
+    constexpr std::size_t kMaxEnvelopeChars = 3500;
+    constexpr std::size_t kMaxFragments = 64;
+    constexpr std::size_t kMaxCallDistanceAfterAnchor = 0x200;
 
-    struct ModuleView
+    struct MemorySpan
     {
         std::uintptr_t base{ 0 };
         std::size_t size{ 0 };
-        std::uintptr_t textBase{ 0 };
-        std::size_t textSize{ 0 };
-        std::uintptr_t rdataBase{ 0 };
-        std::size_t rdataSize{ 0 };
+        bool readable{ false };
+        bool executable{ false };
+        HMODULE allocationModule{ nullptr };
     };
 
     struct FunctionBounds
@@ -41,15 +44,20 @@ namespace
     {
         std::uintptr_t site{ 0 };
         std::uintptr_t target{ 0 };
+        std::size_t distanceAfterAnchor{ 0 };
     };
 
     std::mutex g_lock;
     STRPM::ReceiveCallback g_callback = nullptr;
     void* g_userData = nullptr;
+    std::string g_displayName;
+    std::atomic<std::uint64_t> g_sequence{ 1 };
+
+    HMODULE g_selfModule = nullptr;
+    std::vector<MemorySpan> g_memory;
     std::vector<std::uintptr_t> g_anchorAddresses;
     std::vector<std::uintptr_t> g_xrefs;
     std::vector<CallSite> g_processChatCalls;
-    std::optional<ModuleView> g_module;
     std::optional<FunctionBounds> g_processChatBounds;
 
     void Log(const char* fmt, ...)
@@ -67,116 +75,155 @@ namespace
         fclose(file);
     }
 
-    bool IsReadableAddress(std::uintptr_t address, std::size_t size)
+    void ResolveSelfModule()
     {
-        if (address == 0 || size == 0)
-            return false;
+        if (g_selfModule)
+            return;
 
+        HMODULE module = nullptr;
+        if (GetModuleHandleExA(
+                GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                reinterpret_cast<LPCSTR>(&ResolveSelfModule),
+                &module))
+        {
+            g_selfModule = module;
+        }
+    }
+
+    bool IsReadableProtection(DWORD protect)
+    {
+        if ((protect & PAGE_GUARD) != 0 || protect == PAGE_NOACCESS)
+            return false;
+        const DWORD p = protect & 0xFF;
+        return p == PAGE_READONLY || p == PAGE_READWRITE || p == PAGE_WRITECOPY ||
+               p == PAGE_EXECUTE_READ || p == PAGE_EXECUTE_READWRITE || p == PAGE_EXECUTE_WRITECOPY;
+    }
+
+    bool IsExecutableProtection(DWORD protect)
+    {
+        if ((protect & PAGE_GUARD) != 0 || protect == PAGE_NOACCESS)
+            return false;
+        const DWORD p = protect & 0xFF;
+        return p == PAGE_EXECUTE || p == PAGE_EXECUTE_READ ||
+               p == PAGE_EXECUTE_READWRITE || p == PAGE_EXECUTE_WRITECOPY;
+    }
+
+    HMODULE ModuleForAllocationBase(void* allocationBase)
+    {
+        if (!allocationBase)
+            return nullptr;
+
+        char path[MAX_PATH]{};
+        const auto module = reinterpret_cast<HMODULE>(allocationBase);
+        if (GetModuleFileNameA(module, path, static_cast<DWORD>(std::size(path))) == 0)
+            return nullptr;
+        return module;
+    }
+
+    std::string ModuleNameForAddress(std::uintptr_t address)
+    {
         MEMORY_BASIC_INFORMATION mbi{};
         if (VirtualQuery(reinterpret_cast<void*>(address), &mbi, sizeof(mbi)) != sizeof(mbi))
-            return false;
-        if (mbi.State != MEM_COMMIT || (mbi.Protect & PAGE_GUARD) != 0 || mbi.Protect == PAGE_NOACCESS)
-            return false;
+            return "<unknown>";
 
-        const auto regionBegin = reinterpret_cast<std::uintptr_t>(mbi.BaseAddress);
-        const auto regionEnd = regionBegin + static_cast<std::size_t>(mbi.RegionSize);
-        return address >= regionBegin && address + size <= regionEnd;
-    }
-
-    std::optional<ModuleView> GetTargetModule()
-    {
-        const auto module = GetModuleHandleA(kTargetModule);
+        const auto module = ModuleForAllocationBase(mbi.AllocationBase);
         if (!module)
-            return std::nullopt;
+            return "<private-mapped>";
 
-        const auto base = reinterpret_cast<std::uintptr_t>(module);
-        if (!IsReadableAddress(base, sizeof(IMAGE_DOS_HEADER)))
-            return std::nullopt;
+        char path[MAX_PATH]{};
+        if (GetModuleFileNameA(module, path, static_cast<DWORD>(std::size(path))) == 0)
+            return "<module>";
 
-        const auto* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(base);
-        if (dos->e_magic != IMAGE_DOS_SIGNATURE)
-            return std::nullopt;
-
-        const auto ntAddress = base + static_cast<std::uintptr_t>(dos->e_lfanew);
-        if (!IsReadableAddress(ntAddress, sizeof(IMAGE_NT_HEADERS64)))
-            return std::nullopt;
-
-        const auto* nt = reinterpret_cast<const IMAGE_NT_HEADERS64*>(ntAddress);
-        if (nt->Signature != IMAGE_NT_SIGNATURE || nt->OptionalHeader.Magic != IMAGE_NT_OPTIONAL_HDR64_MAGIC)
-            return std::nullopt;
-
-        ModuleView result{};
-        result.base = base;
-        result.size = nt->OptionalHeader.SizeOfImage;
-
-        const auto* section = IMAGE_FIRST_SECTION(nt);
-        for (unsigned i = 0; i < nt->FileHeader.NumberOfSections; ++i)
-        {
-            char name[9]{};
-            std::memcpy(name, section[i].Name, 8);
-            const auto sectionBase = base + section[i].VirtualAddress;
-            const auto sectionSize = static_cast<std::size_t>(std::max(section[i].Misc.VirtualSize, section[i].SizeOfRawData));
-
-            if (std::strcmp(name, ".text") == 0)
-            {
-                result.textBase = sectionBase;
-                result.textSize = sectionSize;
-            }
-            else if (std::strcmp(name, ".rdata") == 0)
-            {
-                result.rdataBase = sectionBase;
-                result.rdataSize = sectionSize;
-            }
-        }
-
-        if (result.textBase == 0 || result.textSize == 0 || result.rdataBase == 0 || result.rdataSize == 0)
-            return std::nullopt;
-        return result;
+        const char* slash = std::max(std::strrchr(path, '\\'), std::strrchr(path, '/'));
+        return slash ? slash + 1 : path;
     }
 
-    void FindAnchorCopies(const ModuleView& module)
+    void EnumerateMemory()
+    {
+        ResolveSelfModule();
+        g_memory.clear();
+
+        SYSTEM_INFO info{};
+        GetSystemInfo(&info);
+        auto current = reinterpret_cast<std::uintptr_t>(info.lpMinimumApplicationAddress);
+        const auto maximum = reinterpret_cast<std::uintptr_t>(info.lpMaximumApplicationAddress);
+
+        while (current < maximum)
+        {
+            MEMORY_BASIC_INFORMATION mbi{};
+            if (VirtualQuery(reinterpret_cast<void*>(current), &mbi, sizeof(mbi)) != sizeof(mbi))
+                break;
+
+            const auto base = reinterpret_cast<std::uintptr_t>(mbi.BaseAddress);
+            const auto size = static_cast<std::size_t>(mbi.RegionSize);
+            const auto allocationModule = ModuleForAllocationBase(mbi.AllocationBase);
+
+            if (mbi.State == MEM_COMMIT && size != 0 && allocationModule != g_selfModule)
+            {
+                const bool readable = IsReadableProtection(mbi.Protect);
+                const bool executable = IsExecutableProtection(mbi.Protect);
+                if (readable || executable)
+                    g_memory.push_back(MemorySpan{ base, size, readable, executable, allocationModule });
+            }
+
+            if (size == 0 || base + size <= current)
+                break;
+            current = base + size;
+        }
+    }
+
+    void FindAnchorCopies()
     {
         g_anchorAddresses.clear();
         const auto* needle = reinterpret_cast<const std::uint8_t*>(kSendChatAnchor);
         constexpr std::size_t needleSize = sizeof(kSendChatAnchor) - 1;
 
-        if (!IsReadableAddress(module.rdataBase, module.rdataSize) || module.rdataSize < needleSize)
-            return;
-
-        const auto* bytes = reinterpret_cast<const std::uint8_t*>(module.rdataBase);
-        for (std::size_t i = 0; i + needleSize <= module.rdataSize; ++i)
+        for (const auto& span : g_memory)
         {
-            if (std::memcmp(bytes + i, needle, needleSize) == 0)
-                g_anchorAddresses.push_back(module.rdataBase + i);
+            if (!span.readable || span.size < needleSize)
+                continue;
+
+            const auto* bytes = reinterpret_cast<const std::uint8_t*>(span.base);
+            for (std::size_t i = 0; i + needleSize <= span.size; ++i)
+            {
+                if (std::memcmp(bytes + i, needle, needleSize) == 0)
+                    g_anchorAddresses.push_back(span.base + i);
+            }
         }
     }
 
-    void FindRipRelativeXrefs(const ModuleView& module)
+    void FindRipRelativeXrefs()
     {
         g_xrefs.clear();
-        if (g_anchorAddresses.empty() || !IsReadableAddress(module.textBase, module.textSize))
+        if (g_anchorAddresses.empty())
             return;
 
-        const auto* code = reinterpret_cast<const std::uint8_t*>(module.textBase);
-        for (std::size_t i = 0; i + 7 <= module.textSize; ++i)
+        for (const auto& span : g_memory)
         {
-            // LEA r64, [RIP+disp32]. REX.W can be 48-4F depending on destination register.
-            if ((code[i] & 0xF8) != 0x48 || code[i + 1] != 0x8D)
-                continue;
-            const std::uint8_t modrm = code[i + 2];
-            if ((modrm & 0xC7) != 0x05)
+            if (!span.executable || span.size < 7)
                 continue;
 
-            std::int32_t displacement = 0;
-            std::memcpy(&displacement, code + i + 3, sizeof(displacement));
-            const auto instruction = module.textBase + i;
-            const auto target = instruction + 7 + static_cast<std::intptr_t>(displacement);
-            if (std::ranges::find(g_anchorAddresses, target) != g_anchorAddresses.end())
-                g_xrefs.push_back(instruction);
+            const auto* code = reinterpret_cast<const std::uint8_t*>(span.base);
+            for (std::size_t i = 0; i + 7 <= span.size; ++i)
+            {
+                if ((code[i] & 0xF8) != 0x48 || code[i + 1] != 0x8D)
+                    continue;
+
+                const std::uint8_t modrm = code[i + 2];
+                if ((modrm & 0xC7) != 0x05)
+                    continue;
+
+                std::int32_t displacement = 0;
+                std::memcpy(&displacement, code + i + 3, sizeof(displacement));
+                const auto instruction = span.base + i;
+                const auto target = instruction + 7 + static_cast<std::intptr_t>(displacement);
+                if (std::find(g_anchorAddresses.begin(), g_anchorAddresses.end(), target) != g_anchorAddresses.end())
+                    g_xrefs.push_back(instruction);
+            }
         }
     }
 
-    std::optional<FunctionBounds> GetFunctionBounds(std::uintptr_t address, const ModuleView& module)
+    std::optional<FunctionBounds> GetFunctionBounds(std::uintptr_t address)
     {
         DWORD64 imageBase = 0;
         const auto runtimeFunction = RtlLookupFunctionEntry(
@@ -188,16 +235,31 @@ namespace
 
         const auto begin = static_cast<std::uintptr_t>(imageBase + runtimeFunction->BeginAddress);
         const auto end = static_cast<std::uintptr_t>(imageBase + runtimeFunction->EndAddress);
-        if (begin < module.textBase || end > module.textBase + module.textSize || begin >= end)
+        if (begin == 0 || end <= begin || address < begin || address >= end)
             return std::nullopt;
         return FunctionBounds{ begin, end };
     }
 
-    std::vector<CallSite> EnumerateDirectCalls(const FunctionBounds& bounds, const ModuleView& module)
+    bool IsCommittedExecutable(std::uintptr_t address)
+    {
+        MEMORY_BASIC_INFORMATION mbi{};
+        if (VirtualQuery(reinterpret_cast<void*>(address), &mbi, sizeof(mbi)) != sizeof(mbi))
+            return false;
+        return mbi.State == MEM_COMMIT && IsExecutableProtection(mbi.Protect);
+    }
+
+    std::vector<CallSite> EnumerateDirectCalls(const FunctionBounds& bounds, std::uintptr_t anchorXref)
     {
         std::vector<CallSite> result;
-        if (bounds.end <= bounds.begin || !IsReadableAddress(bounds.begin, bounds.end - bounds.begin))
+        if (bounds.end <= bounds.begin)
             return result;
+
+        MEMORY_BASIC_INFORMATION mbi{};
+        if (VirtualQuery(reinterpret_cast<void*>(bounds.begin), &mbi, sizeof(mbi)) != sizeof(mbi) ||
+            mbi.State != MEM_COMMIT || !IsReadableProtection(mbi.Protect))
+        {
+            return result;
+        }
 
         const auto* code = reinterpret_cast<const std::uint8_t*>(bounds.begin);
         const auto size = bounds.end - bounds.begin;
@@ -210,51 +272,160 @@ namespace
             std::memcpy(&displacement, code + i + 1, sizeof(displacement));
             const auto site = bounds.begin + i;
             const auto target = site + 5 + static_cast<std::intptr_t>(displacement);
-            if (target >= module.textBase && target < module.textBase + module.textSize)
-                result.push_back(CallSite{ site, target });
+            if (!IsCommittedExecutable(target))
+                continue;
+
+            const auto distance = site > anchorXref ? static_cast<std::size_t>(site - anchorXref) : 0;
+            result.push_back(CallSite{ site, target, distance });
         }
         return result;
     }
 
     bool ResolveProcessChatMessage()
     {
-        g_module = GetTargetModule();
         g_processChatBounds.reset();
         g_processChatCalls.clear();
         g_anchorAddresses.clear();
         g_xrefs.clear();
 
-        if (!g_module)
+        EnumerateMemory();
+        FindAnchorCopies();
+        FindRipRelativeXrefs();
+
+        // The public 1.8.0 executable is packed. At runtime the actual client code
+        // may live in a private mapped image rather than the raw PE sections, so we
+        // deliberately resolve from process memory instead of .text/.rdata.
+        std::vector<std::uintptr_t> viableXrefs;
+        for (const auto xref : g_xrefs)
         {
-            Log("target module not loaded: %s", kTargetModule);
+            const auto bounds = GetFunctionBounds(xref);
+            if (bounds)
+                viableXrefs.push_back(xref);
+        }
+
+        if (viableXrefs.size() != 1)
+        {
+            Log("resolver rejected build: expected exactly one unwind-backed chat xref, found %zu", viableXrefs.size());
             return false;
         }
 
-        FindAnchorCopies(*g_module);
-        FindRipRelativeXrefs(*g_module);
-
-        if (g_anchorAddresses.size() != 1 || g_xrefs.size() != 1)
-        {
-            Log("resolver rejected build: expected exactly one chat anchor and one xref");
-            return false;
-        }
-
-        g_processChatBounds = GetFunctionBounds(g_xrefs.front(), *g_module);
+        const auto xref = viableXrefs.front();
+        g_xrefs = { xref };
+        g_processChatBounds = GetFunctionBounds(xref);
         if (!g_processChatBounds)
-        {
-            Log("resolver could not obtain unwind bounds for ProcessChatMessage candidate");
             return false;
-        }
 
-        if (g_xrefs.front() < g_processChatBounds->begin || g_xrefs.front() >= g_processChatBounds->end)
-        {
-            Log("resolver rejected inconsistent ProcessChatMessage bounds");
-            g_processChatBounds.reset();
-            return false;
-        }
-
-        g_processChatCalls = EnumerateDirectCalls(*g_processChatBounds, *g_module);
+        g_processChatCalls = EnumerateDirectCalls(*g_processChatBounds, xref);
+        std::ranges::sort(g_processChatCalls, [](const CallSite& lhs, const CallSite& rhs) {
+            return lhs.site < rhs.site;
+        });
         return !g_processChatCalls.empty();
+    }
+
+    char HexDigit(unsigned value)
+    {
+        static constexpr char digits[] = "0123456789ABCDEF";
+        return digits[value & 0xF];
+    }
+
+    std::string HexEncode(const void* data, std::size_t size)
+    {
+        const auto* bytes = static_cast<const std::uint8_t*>(data);
+        std::string result;
+        result.resize(size * 2);
+        for (std::size_t i = 0; i < size; ++i)
+        {
+            result[i * 2] = HexDigit(bytes[i] >> 4);
+            result[i * 2 + 1] = HexDigit(bytes[i]);
+        }
+        return result;
+    }
+
+    bool IsChannelSafe(const char* channel)
+    {
+        if (!channel || !channel[0])
+            return false;
+        const auto length = std::strlen(channel);
+        if (length > STRPM::kMaxChannelLength)
+            return false;
+        return std::strchr(channel, '|') == nullptr && std::strchr(channel, '=') == nullptr;
+    }
+
+    std::optional<std::string> TargetField(const STRPM::Target& target)
+    {
+        switch (target.kind)
+        {
+        case STRPM::TargetKind::kServer:
+            return std::string("server");
+        case STRPM::TargetKind::kPlayer:
+            if (target.connectionID == 0)
+                return std::nullopt;
+            return std::string("id:") + std::to_string(target.connectionID);
+        case STRPM::TargetKind::kAllPlayers:
+            return std::string("all");
+        case STRPM::TargetKind::kHost:
+            // The documented STR server scripting API does not expose a stable
+            // host lookup. Do not silently turn host into broadcast.
+            return std::nullopt;
+        default:
+            return std::nullopt;
+        }
+    }
+
+    std::vector<std::string> BuildEnvelopes(
+        const char* channel,
+        const STRPM::Target& target,
+        const void* data,
+        std::size_t size,
+        std::uint32_t flags,
+        std::uint64_t sequence)
+    {
+        std::vector<std::string> result;
+        const auto targetField = TargetField(target);
+        if (!targetField)
+            return result;
+
+        const auto payloadHex = HexEncode(data, size);
+        const auto messageId = std::to_string(GetCurrentProcessId()) + "-" +
+                               std::to_string(GetTickCount64()) + "-" +
+                               std::to_string(sequence);
+
+        std::ostringstream prefix;
+        prefix << "STRPM|v2|msg=" << messageId
+               << "|seq=" << sequence
+               << "|channel=" << channel
+               << "|target=" << *targetField
+               << "|flags=" << flags;
+
+        // Reserve enough room for part/parts/payload fields and decimal fragment
+        // counters. Keeping envelopes well below the server's 4096-character cap
+        // gives room for authenticated sender metadata appended by the Lua relay.
+        const std::string fixedPrefix = prefix.str();
+        constexpr std::size_t overheadReserve = 96;
+        if (fixedPrefix.size() + overheadReserve >= kMaxEnvelopeChars)
+            return result;
+
+        const auto payloadCharsPerFragment = kMaxEnvelopeChars - fixedPrefix.size() - overheadReserve;
+        const auto fragmentCount = std::max<std::size_t>(1, (payloadHex.size() + payloadCharsPerFragment - 1) / payloadCharsPerFragment);
+        if (fragmentCount > kMaxFragments)
+            return result;
+
+        result.reserve(fragmentCount);
+        for (std::size_t index = 0; index < fragmentCount; ++index)
+        {
+            const auto offset = index * payloadCharsPerFragment;
+            const auto count = std::min(payloadCharsPerFragment, payloadHex.size() - std::min(offset, payloadHex.size()));
+
+            std::ostringstream envelope;
+            envelope << fixedPrefix
+                     << "|part=" << (index + 1)
+                     << "|parts=" << fragmentCount
+                     << "|payload=";
+            if (count != 0)
+                envelope << payloadHex.substr(offset, count);
+            result.push_back(envelope.str());
+        }
+        return result;
     }
 
     void ProbeSTR180()
@@ -266,53 +437,47 @@ namespace
 
         Log("STRPM bridge resolver target: %s", kTargetBuild);
         Log("source tag: tiltedphoques/TiltedEvolution v1.8.0 (9c23efa422bbc1e5c06eef5522ca73971a513e35)");
+        Log("Nexus public exe SHA-256: 77f23c9c82c412252b5c4491a09d7ab4349cbc6c77992c4766882f54798cb99d");
 
         const bool resolved = ResolveProcessChatMessage();
-        if (g_module)
-        {
-            Log("module base=0x%llX size=0x%zX text=0x%llX+0x%zX rdata=0x%llX+0x%zX",
-                static_cast<unsigned long long>(g_module->base),
-                g_module->size,
-                static_cast<unsigned long long>(g_module->textBase),
-                g_module->textSize,
-                static_cast<unsigned long long>(g_module->rdataBase),
-                g_module->rdataSize);
-        }
-
-        Log("send-chat anchor copies: %zu", g_anchorAddresses.size());
+        Log("mapped memory spans considered: %zu", g_memory.size());
+        Log("send-chat anchor copies outside bridge module: %zu", g_anchorAddresses.size());
         for (const auto address : g_anchorAddresses)
-            Log("  anchor = 0x%llX (RVA 0x%llX)",
+            Log("  anchor = 0x%llX module=%s",
                 static_cast<unsigned long long>(address),
-                g_module ? static_cast<unsigned long long>(address - g_module->base) : 0ull);
+                ModuleNameForAddress(address).c_str());
 
-        Log("send-chat RIP xrefs: %zu", g_xrefs.size());
+        Log("unwind-backed send-chat RIP xrefs: %zu", g_xrefs.size());
         for (const auto address : g_xrefs)
-            Log("  xref = 0x%llX (RVA 0x%llX)",
+            Log("  xref = 0x%llX module=%s",
                 static_cast<unsigned long long>(address),
-                g_module ? static_cast<unsigned long long>(address - g_module->base) : 0ull);
+                ModuleNameForAddress(address).c_str());
 
-        if (g_processChatBounds && g_module)
+        if (g_processChatBounds && !g_xrefs.empty())
         {
-            Log("ProcessChatMessage candidate: 0x%llX-0x%llX (RVA 0x%llX-0x%llX)",
+            Log("ProcessChatMessage candidate: 0x%llX-0x%llX module=%s",
                 static_cast<unsigned long long>(g_processChatBounds->begin),
                 static_cast<unsigned long long>(g_processChatBounds->end),
-                static_cast<unsigned long long>(g_processChatBounds->begin - g_module->base),
-                static_cast<unsigned long long>(g_processChatBounds->end - g_module->base));
+                ModuleNameForAddress(g_processChatBounds->begin).c_str());
             Log("direct CALL candidates in ProcessChatMessage: %zu", g_processChatCalls.size());
             for (std::size_t i = 0; i < g_processChatCalls.size(); ++i)
             {
                 const auto& call = g_processChatCalls[i];
-                Log("  call[%zu] site=0x%llX (RVA 0x%llX) target=0x%llX (RVA 0x%llX)%s",
+                const bool nearAfterAnchor = call.site > g_xrefs.front() &&
+                                             call.distanceAfterAnchor <= kMaxCallDistanceAfterAnchor;
+                Log("  call[%zu] site=0x%llX target=0x%llX distanceAfterAnchor=0x%zX targetModule=%s%s",
                     i,
                     static_cast<unsigned long long>(call.site),
-                    static_cast<unsigned long long>(call.site - g_module->base),
                     static_cast<unsigned long long>(call.target),
-                    static_cast<unsigned long long>(call.target - g_module->base),
-                    call.site > g_xrefs.front() ? " [after anchor xref]" : "");
+                    call.distanceAfterAnchor,
+                    ModuleNameForAddress(call.target).c_str(),
+                    nearAfterAnchor ? " [near-after-anchor]" : "");
             }
         }
 
-        Log("resolver status: %s", resolved ? "ProcessChatMessage located; transport call still intentionally unarmed" : "not resolved");
+        Log("resolver status: %s", resolved
+            ? "ProcessChatMessage located in mapped runtime; native send dispatch remains fail-safe until target ABI is validated"
+            : "not resolved");
     }
 
     STRPM::Result STRPM_CALL Start(STRPM::ReceiveCallback callback, void* userData)
@@ -324,11 +489,8 @@ namespace
             g_callback = callback;
             g_userData = userData;
         }
-        ProbeSTR180();
 
-        // Do not report a working transport until the exact TransportService::Send
-        // call target and the receive interception point have both been validated
-        // against the public 1.8.0 binary.
+        ProbeSTR180();
         return STRPM::Result::kNotConnected;
     }
 
@@ -340,8 +502,38 @@ namespace
         return STRPM::Result::kOk;
     }
 
-    STRPM::Result STRPM_CALL Send(const char*, STRPM::Target, const void*, std::size_t, std::uint32_t)
+    STRPM::Result STRPM_CALL Send(
+        const char* channel,
+        STRPM::Target target,
+        const void* data,
+        std::size_t size,
+        std::uint32_t flags)
     {
+        if (!IsChannelSafe(channel) || (!data && size != 0))
+            return STRPM::Result::kInvalidArgument;
+        if (size > STRPM::kMaxPayloadBytes)
+            return STRPM::Result::kPayloadTooLarge;
+        if (target.kind == STRPM::TargetKind::kHost)
+            return STRPM::Result::kTargetNotFound;
+
+        const auto sequence = g_sequence.fetch_add(1);
+        const auto envelopes = BuildEnvelopes(channel, target, data, size, flags, sequence);
+        if (envelopes.empty())
+            return STRPM::Result::kInvalidArgument;
+
+        Log("prepared STRPM message seq=%llu channel=%s size=%zu fragments=%zu targetKind=%u",
+            static_cast<unsigned long long>(sequence),
+            channel,
+            size,
+            envelopes.size(),
+            static_cast<unsigned>(target.kind));
+        for (std::size_t i = 0; i < envelopes.size(); ++i)
+            Log("  envelope[%zu] chars=%zu", i, envelopes[i].size());
+
+        // Envelope generation is now complete. The final step is to feed each
+        // envelope into STR's existing chat send path after the 1.8.0 runtime
+        // call target and its owning TransportService instance are validated.
+        // Until then, fail closed rather than call an uncertain address.
         return STRPM::Result::kNotConnected;
     }
 
@@ -350,8 +542,10 @@ namespace
         return STRPM::Result::kNotConnected;
     }
 
-    STRPM::Result STRPM_CALL SetLocalDisplayName(const char*)
+    STRPM::Result STRPM_CALL SetLocalDisplayName(const char* displayName)
     {
+        std::scoped_lock lock(g_lock);
+        g_displayName = displayName ? displayName : "";
         return STRPM::Result::kOk;
     }
 
