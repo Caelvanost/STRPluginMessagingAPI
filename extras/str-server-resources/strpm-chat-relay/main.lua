@@ -1,13 +1,13 @@
 -- STR Plugin Messaging chat relay for unmodified Skyrim Together servers.
 --
--- This resource only handles server-side routing. A client bridge still has
--- to inject STRPM envelopes into STR chat and consume relayed envelopes before
--- they are shown by the overlay.
+-- This resource only handles server-side routing. The client bridge injects
+-- STRPM envelopes into STR chat and consumes the relayed envelopes.
 
 local PREFIX = "STRPM|v2|"
 local MAX_ENVELOPE_LENGTH = 4096
 local MAX_CHANNEL_LENGTH = 96
 local MAX_PARTS = 64
+local FLAG_ALLOW_LOOPBACK = 4
 
 local gameServer = GameServer:get()
 local playerManager = PlayerManager:get()
@@ -56,6 +56,10 @@ local function safeField(value)
   return result
 end
 
+local function flagIsSet(flags, flag)
+  return math.floor(flags / flag) % 2 == 1
+end
+
 local function validateEnvelope(fields)
   if fields["msg"] == nil or not validUnsigned(fields["seq"]) then
     return false, "missing msg/seq"
@@ -65,6 +69,9 @@ local function validateEnvelope(fields)
   end
   if fields["payload"] == nil or string.match(fields["payload"], "^[0-9A-Fa-f]*$") == nil then
     return false, "invalid payload"
+  end
+  if not validUnsigned(fields["flags"]) then
+    return false, "invalid flags"
   end
   if not validUnsigned(fields["part"]) or not validUnsigned(fields["parts"]) then
     return false, "invalid fragment metadata"
@@ -84,15 +91,26 @@ local function validateEnvelope(fields)
   return true, nil
 end
 
-local function relayToTarget(target, envelope)
+local function relayToTarget(target, envelope, senderConnectionId, flags)
+  local allowLoopback = flagIsSet(flags, FLAG_ALLOW_LOOPBACK)
+
   if target == nil or target == "" or target == "all" then
-    gameServer:SendGlobalChatMessage(envelope)
+    local allPlayers = playerManager:GetAllPlayers()
+    for _, player in ipairs(allPlayers) do
+      local connectionId = player:GetConnectionId()
+      if allowLoopback or connectionId ~= senderConnectionId then
+        gameServer:SendChatMessage(connectionId, envelope)
+      end
+    end
     return true
   end
 
   local id = string.match(target, "^id:(%d+)$")
   if id ~= nil then
-    gameServer:SendChatMessage(tonumber(id), envelope)
+    local connectionId = tonumber(id)
+    if allowLoopback or connectionId ~= senderConnectionId then
+      gameServer:SendChatMessage(connectionId, envelope)
+    end
     return true
   end
 
@@ -108,7 +126,8 @@ addEventHandler("onChatMessage", function(entityId, message)
     return
   end
 
-  -- Prevent the transport envelope from being rebroadcast as ordinary chat.
+  -- Prevent the client-originated transport envelope from being rebroadcast as
+  -- ordinary chat. STRPM explicitly performs the routing below.
   cancelEvent("STRPM transport envelope")
 
   if string.len(message) > MAX_ENVELOPE_LENGTH then
@@ -129,13 +148,15 @@ addEventHandler("onChatMessage", function(entityId, message)
     return
   end
 
+  local senderConnectionId = player:GetConnectionId()
+  local flags = tonumber(fields["flags"]) or 0
   local relayEnvelope =
     message ..
-    "|sender=" .. tostring(player:GetConnectionId()) ..
+    "|sender=" .. tostring(senderConnectionId) ..
     "|senderName=" .. safeField(player:GetUsername()) ..
     "|serverTick=" .. tostring(gameServer:GetTick())
 
-  if not relayToTarget(fields["target"], relayEnvelope) then
+  if not relayToTarget(fields["target"], relayEnvelope, senderConnectionId, flags) then
     print("[STRPM] Dropped envelope with unsupported target")
   end
 end)
