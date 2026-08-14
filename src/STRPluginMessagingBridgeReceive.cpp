@@ -381,12 +381,6 @@ namespace STRPMBridgeReceive
                 return false;
             }
 
-            // ServerMessage vftable order on MSVC x64:
-            // 0 scalar deleting dtor
-            // 1 SerializeRaw
-            // 2 SerializeDifferential
-            // 3 DeserializeRaw
-            // 4 DeserializeDifferential
             const auto deserialize = *reinterpret_cast<const std::uintptr_t*>(
                 *vftable + 3 * sizeof(void*));
             if (!IsExecutableAddress(deserialize))
@@ -580,7 +574,6 @@ namespace STRPMBridgeReceive
                 else
                     ++it;
             }
-
             while (g_pending.size() > kMaxPendingMessages)
                 g_pending.erase(g_pending.begin());
         }
@@ -625,9 +618,9 @@ namespace STRPMBridgeReceive
 
             const std::string key = std::to_string(*senderIdValue) + "|" + std::string(*messageId);
             const auto now = std::chrono::steady_clock::now();
-
             std::string combinedHex;
             CompletedMessage completed{};
+
             {
                 std::scoped_lock lock(g_pendingLock);
                 CleanupPendingLocked(now);
@@ -735,10 +728,6 @@ namespace STRPMBridgeReceive
             if (PeekChatEnvelope(reader, playerName, chatMessage))
                 DeliverEnvelope(playerName, chatMessage);
 
-            // Let STR execute DeserializeRaw normally, then restore the breakpoint
-            // after exactly one instruction. A later hook point will suppress the
-            // internal STRPM envelope from the visible CEF chat; this breakpoint is
-            // responsible only for reliable transport delivery.
             PatchByte(g_deserializeAddress, g_originalByte);
             g_rearmAfterSingleStep = true;
             exceptionInfo->ContextRecord->EFlags |= 0x100u;
@@ -776,6 +765,9 @@ namespace STRPMBridgeReceive
 
         g_callback = callback;
         g_userData = userData;
+        if (IsResolved())
+            return true;
+
         if (!ResolveDeserializeAddress())
             return false;
         if (!ArmBreakpoint())
