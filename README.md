@@ -3,9 +3,9 @@
 Shared messaging broker for Skyrim Together Reborn compatibility mods.
 
 The project provides one common API for SKSE mods that need to exchange small,
-namespaced messages between Skyrim Together players. The current development
-path targets the **official Skyrim Together Reborn 1.8.0 client and server** and
-uses STR's existing connection rather than opening a separate UDP transport.
+namespaced messages between Skyrim Together players. The current implementation
+targets the **official Skyrim Together Reborn 1.8.0 client and server** and uses
+STR's existing connection rather than opening a separate UDP transport.
 
 ## Why
 
@@ -16,123 +16,117 @@ Several STR compatibility mods need essentially the same networking layer:
 - IEDSyncTogether: Immersive Equipment Displays visual equipment slots.
 - TradeTogether: consent-based targeted trade requests.
 
-Historically, implementing those features independently means duplicating UDP
-transport, discovery, shared-secret handling, peer caches, relay logic and
-firewall-visible ports. STRPluginMessagingAPI centralizes the contract so each
-mod only has to register a channel and exchange payloads.
+STRPluginMessagingAPI centralizes that contract so each mod can register a
+channel and exchange payloads without implementing its own discovery, relay,
+peer cache or firewall-visible UDP port.
 
 ## Architecture
 
-The intended runtime path is now:
-
 ```text
-OStimTogether / MorphSyncTogether / IEDSyncTogether / TradeTogether
-                              |
-                              v
-                 STRPluginMessagingAPI.dll
-                              |
-                              v
-                STRPluginMessagingBridge.dll
-                              |
-                              v
-             Skyrim Together Reborn 1.8.0
-                              |
-                    existing STR connection
-                              |
-                              v
-               official STR server 1.8.0
-                              |
-                              v
-                 strpm-chat-relay resource
-                              |
-                              v
-                    target STR client
-                              |
-                              v
-                STRPluginMessagingBridge
-                              |
-                              v
-                 receiving SKSE mod
+SKSE compatibility mod
+        |
+        v
+STRPluginMessagingAPI.dll
+        |
+        v
+STRPluginMessagingBridge.dll
+        |
+        v
+official Skyrim Together Reborn 1.8.0 client
+        |
+        | existing STR chat/network connection
+        v
+official STR 1.8.0 server
+        |
+        v
+strpm-chat-relay Lua resource
+        |
+        v
+target official STR client
+        |
+        v
+STRPluginMessagingBridge.dll
+        |
+        v
+registered STRPM channel callback
 ```
 
-The server relay uses STR's official Lua scripting API and the existing chat
-transport as an internal tunnel. STRPM messages use a reserved `STRPM|v2|...`
-envelope and are intercepted by the relay rather than being treated as ordinary
-player chat.
+STRPM payloads are encoded inside reserved `STRPM|v2|...` chat envelopes. The
+server resource intercepts those envelopes and performs explicit STRPM routing;
+normal player chat is left untouched.
 
-This approach is intended to avoid:
-
-- a custom Skyrim Together protocol fork;
-- custom STR opcodes;
-- a separately compiled STR server;
-- extra UDP ports or port forwarding for individual compatibility mods.
+This avoids a custom STR protocol fork, custom opcodes, a custom server binary,
+and separate client-mod UDP ports.
 
 ## Public API
 
-The broker exposes the C ABI entry point:
+The broker exposes:
 
 ```cpp
 STR_QueryPluginMessagingInterface(version, outInterface)
 ```
 
-A client mod can then:
-
-1. Query the interface from `STRPluginMessagingAPI.dll`.
-2. Register a namespaced channel such as `chaos.ostim_together.scene.v1`.
-3. Send opaque payload bytes to a player, host/server, or all players.
-4. Receive callbacks containing sender identity and payload bytes.
-5. Optionally call `setLocalDisplayName()` when the Skyrim player name is known.
-
-The public header is:
+Client mods can register a namespaced channel, send opaque bytes, receive sender
+metadata and payload callbacks, and optionally set the local Skyrim display
+name. The stable public header is:
 
 ```text
 include/STRPluginMessagingAPI/STRPluginMessagingAPI.h
 ```
 
-The transport-facing private ABI is exposed through:
+The version-specific bridge uses the private transport ABI:
 
 ```text
 STRPM_QueryTransportInterface
 ```
 
-This separation is deliberate: mods depend on the stable messaging API, while
-STR-version-specific integration remains isolated inside the bridge.
+Client mods never need to know STR internal addresses.
 
 ## Current Status
 
-The project is **under active development and is not yet a finished networking
-replacement for the client mods**.
+The project is now at the **first native STR 1.8.0 send/receive prototype**.
+It compiles successfully with MSVC 19.51 / Visual Studio 2026 in GitHub Actions,
+but still requires an in-game two-client validation before it should be treated
+as production-ready.
 
 Implemented:
 
-- public C messaging API;
-- Windows loader/runtime;
-- private `STRPM_QueryTransportInterface` transport ABI;
-- optional diagnostics through `STR_QueryPluginMessagingDiagnostics`;
-- example client;
+- public C messaging API and runtime;
 - STR-only packaged configuration;
-- official-server Lua relay using `STRPM|v2|...` envelopes;
-- targeted and broadcast relay handling;
-- message fragmentation support in the chat-tunnel design;
-- initial `STRPluginMessagingBridge.dll` target;
-- runtime probing/resolution infrastructure for STR 1.8.0;
-- analysis and fingerprinting of the official Nexus STR 1.8.0 binary.
+- private bridge ABI and diagnostics;
+- official-server Lua relay;
+- targeted and all-player routing;
+- `kMessageAllowLoopback` handling on the server relay;
+- payload fragmentation and reassembly;
+- runtime resolution of `OverlayClient::ProcessChatMessage` and
+  `TransportService::Send` from the mapped STR 1.8.0 image;
+- temporary breakpoint capture of the live `TransportService` instance;
+- ABI-compatible chat-message proxy that lets STR itself perform the normal
+  `ClientMessage::Serialize` and network send path;
+- RTTI-based resolution of `NotifyChatMessageBroadcast::DeserializeRaw`;
+- non-destructive receive parsing directly from STR's `Buffer::Reader`;
+- authenticated sender ID/name extraction from server-appended metadata;
+- delivery of completed payloads through the STRPM receive callback;
+- lazy bootstrap so the bridge can load before STR finishes mapping its client
+  runtime;
+- fail-safe behavior when runtime resolution is incomplete;
+- Windows CI build validation and DLL artifact generation.
 
-Still in progress:
+Still to validate or complete:
 
-- resolving the final STR 1.8.0 client send path into `TransportService::Send`;
-- intercepting `NotifyChatMessageBroadcast` reliably on the receiving client;
-- enabling real send/receive in `STRPluginMessagingBridge.dll` after all runtime
-  validations pass;
-- end-to-end Player1/Player2 testing;
+- real Player1 -> Player2 and Player2 -> Player1 runtime tests;
+- suppressing relayed `STRPM|v2|...` envelopes from the visible STR chat UI
+  (the receive prototype currently consumes them for STRPM but still lets STR
+  continue its normal chat processing);
+- local STR connection-ID discovery;
+- final host-target semantics;
 - migrating the individual compatibility mods onto the shared API.
 
-The bridge currently remains fail-safe: an unsupported or unresolved STR build
-must produce `kNotConnected` rather than calling an uncertain address.
+Until the native runtime has been resolved and captured, `send()` returns
+`kNotConnected`. Unsupported/ambiguous builds fail closed rather than calling an
+uncertain address.
 
-## Skyrim Together Reborn Compatibility
-
-The current bridge work explicitly targets the official public:
+## STR 1.8.0 Compatibility Target
 
 ```text
 Skyrim Together Reborn 1.8.0
@@ -140,19 +134,18 @@ TiltedEvolution tag: v1.8.0
 TiltedEvolution commit: 9c23efa422bbc1e5c06eef5522ca73971a513e35
 ```
 
-The official Nexus `SkyrimTogether.exe` used for binary analysis has:
+Official Nexus `SkyrimTogether.exe` used for analysis:
 
 ```text
 Size:    7,058,432 bytes
 SHA-256: 77f23c9c82c412252b5c4491a09d7ab4349cbc6c77992c4766882f54798cb99d
 ```
 
-The public executable is packed/restructured and does not expose a conventional
-`.text`/`.rdata` layout on disk. For that reason, the bridge is being designed
-to validate the supported build and resolve required structures/functions from
-the mapped runtime image rather than relying on fragile absolute addresses.
+The public executable is packed/restructured, so the bridge resolves the
+required client code from the **mapped runtime image** instead of relying on
+absolute file offsets.
 
-Relevant research is documented in:
+Research notes:
 
 ```text
 docs/OFFICIAL_STR_CHAT_TUNNEL.md
@@ -162,48 +155,37 @@ docs/STR_1_8_0_RTTI_NOTES.md
 
 ## Server Resource
 
-The experimental relay is located at:
+The relay lives in:
 
 ```text
 extras/str-server-resources/strpm-chat-relay/
 ```
 
-It is designed for the official STR server scripting system. It recognizes
-STRPM envelopes, validates routing fields, derives the sender identity from the
-actual STR connection, and relays the message through STR's existing chat
-functions.
-
-It is part of the current transport design and should be installed on the STR
-server when performing end-to-end chat-tunnel tests.
+It uses STR's documented server scripting API. Client-originated STRPM messages
+are cancelled as normal chat, validated, tagged with the authenticated STR
+sender identity and relayed to the requested target.
 
 ## Build
-
-Standard CMake build:
 
 ```powershell
 cmake -S . -B build
 cmake --build build --config Release
 ```
 
-The packaged configuration is STR-only. The legacy UDP backend remains in the
-source for development/testing and can be explicitly enabled with:
+The default build is STR-only. The legacy UDP backend is retained only for
+explicit development builds:
 
 ```powershell
 cmake -S . -B build -DSTRPM_ENABLE_UDP_BACKEND=ON
 ```
 
-It is **not** the packaged default and must not be used as a silent fallback.
-
 ### Vortex package
-
-Use:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File .\build-vortex.ps1
 ```
 
-The helper builds the project, stages the Vortex layout, validates required
-archive entries, and writes the generated archive to:
+The generated archive is written to:
 
 ```text
 dist/STRPluginMessagingAPI-v<version>-Vortex.zip
@@ -213,32 +195,39 @@ dist/STRPluginMessagingAPI-v<version>-Vortex.zip
 
 ## Vortex Layout
 
-The base package installs:
-
 ```text
 Data/SKSE/Plugins/STRPluginMessagingAPI.dll
 Data/SKSE/Plugins/STRPluginMessagingAPI.ini
+Data/SkyrimTogetherReborn/STRPluginMessagingBridge.dll
 ```
 
-The packaged build does not open a legacy UDP port.
+The auxiliary bridge intentionally stays outside `Data/SKSE/Plugins`: SKSE
+should load the broker DLL, while the broker itself loads the bridge.
 
-The default transport configuration is STR mode. During bridge development,
-missing or unresolved STR integration intentionally results in `kNotConnected`
-instead of falling back to UDP.
+The default INI points to:
+
+```ini
+[Transport]
+Mode=STR
+STRBridgeModule=Data\SkyrimTogetherReborn\STRPluginMessagingBridge.dll
+```
+
+No legacy UDP port is opened by the packaged STR-only build.
 
 ## Repository Layout
 
-- `include/STRPluginMessagingAPI/` — public API for mod authors.
-- `src/` — broker runtime and STR bridge implementation/probe.
+- `include/STRPluginMessagingAPI/` — stable public API for mod authors.
+- `src/` — broker runtime and STR 1.8.0 bridge implementation.
 - `package/` — default Vortex install files.
-- `examples/` — minimal client usage example.
-- `docs/` — migration, transport design, STR 1.8.0 binary and RTTI research.
+- `examples/` — minimal API usage example.
+- `docs/` — migration, transport design, binary and RTTI research.
 - `extras/str-server-resources/` — official STR server Lua relay resource.
+- `.github/workflows/` — Windows MSVC build validation.
 - `dist/` — locally generated release archives; ignored by Git.
 
 ## Design Rule
 
-Client mods should never depend directly on Skyrim Together internal addresses.
-All STR-version-specific work belongs in `STRPluginMessagingBridge.dll`. This
-allows the public messaging API and mods using it to remain stable when STR
-changes and confines compatibility updates to the bridge layer.
+All STR-version-specific discovery and hooking belongs inside
+`STRPluginMessagingBridge.dll`. The public API and mods using it must remain
+independent of STR internal addresses so a future STR update only requires a
+bridge compatibility update.
