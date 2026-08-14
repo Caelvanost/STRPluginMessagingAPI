@@ -1,4 +1,5 @@
 #include "STRPluginMessagingAPI/STRPluginMessagingAPI.h"
+#include "STRPluginMessagingBridgeReceive.h"
 
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -7,6 +8,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cstdarg>
 #include <cstdint>
 #include <cstdio>
@@ -15,6 +17,7 @@
 #include <optional>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace
@@ -27,6 +30,7 @@ namespace
     constexpr std::size_t kMaxFragments = 64;
     constexpr std::size_t kMaxCallDistanceAfterAnchor = 0x200;
     constexpr std::size_t kExpectedClientMessageOpcodeOffset = 16;
+    constexpr auto kBootstrapRetryDelay = std::chrono::milliseconds(750);
 
     struct MemorySpan
     {
@@ -87,13 +91,18 @@ namespace
     std::vector<std::uintptr_t> g_xrefs;
     std::vector<CallSite> g_processChatCalls;
     std::optional<FunctionBounds> g_processChatBounds;
-    std::uintptr_t g_transportSendAddress = 0;
+    std::atomic<std::uintptr_t> g_transportSendAddress{ 0 };
 
     std::atomic<void*> g_transportInstance{ nullptr };
     std::atomic<bool> g_breakpointArmed{ false };
-    std::atomic<bool> g_transportCaptured{ false };
     std::uint8_t g_originalTransportByte = 0;
     PVOID g_vectoredHandler = nullptr;
+
+    std::atomic<bool> g_bootstrapStop{ false };
+    std::atomic<bool> g_bootstrapStarted{ false };
+    std::atomic<bool> g_sendResolverReady{ false };
+    std::atomic<bool> g_receiveResolverReady{ false };
+    std::thread g_bootstrapThread;
 
     void Log(const char* fmt, ...)
     {
@@ -343,7 +352,7 @@ namespace
         g_processChatCalls.clear();
         g_anchorAddresses.clear();
         g_xrefs.clear();
-        g_transportSendAddress = 0;
+        g_transportSendAddress.store(0);
 
         EnumerateMemory();
         FindAnchorCopies();
@@ -357,10 +366,7 @@ namespace
         }
 
         if (viableXrefs.size() != 1)
-        {
-            Log("resolver rejected build: expected exactly one unwind-backed chat xref, found %zu", viableXrefs.size());
             return false;
-        }
 
         const auto xref = viableXrefs.front();
         g_xrefs = { xref };
@@ -383,9 +389,7 @@ namespace
             if (!targetBounds)
                 continue;
 
-            // TransportService::Send in STR 1.8.0 constructs Buffer(1 << 16).
-            // Requiring the 0x10000 immediate sharply distinguishes it from the
-            // nearby spdlog/fmt and string cleanup calls.
+            // STR 1.8.0 TransportService::Send constructs Buffer(1 << 16).
             if (!FunctionContainsImmediate32(*targetBounds, 0x00010000u))
                 continue;
 
@@ -398,12 +402,9 @@ namespace
             transportCandidates.end());
 
         if (transportCandidates.size() != 1)
-        {
-            Log("resolver rejected transport send: expected one 0x10000-bearing candidate, found %zu", transportCandidates.size());
             return false;
-        }
 
-        g_transportSendAddress = transportCandidates.front();
+        g_transportSendAddress.store(transportCandidates.front());
         return true;
     }
 
@@ -425,7 +426,10 @@ namespace
     {
         if (!g_breakpointArmed.exchange(false))
             return;
-        PatchByte(g_transportSendAddress, g_originalTransportByte);
+
+        const auto address = g_transportSendAddress.load();
+        if (address != 0)
+            PatchByte(address, g_originalTransportByte);
     }
 
     LONG CALLBACK CaptureTransportExceptionHandler(EXCEPTION_POINTERS* exceptionInfo)
@@ -433,26 +437,30 @@ namespace
         if (!exceptionInfo || !exceptionInfo->ExceptionRecord || !exceptionInfo->ContextRecord)
             return EXCEPTION_CONTINUE_SEARCH;
 
+        const auto address = g_transportSendAddress.load();
         if (exceptionInfo->ExceptionRecord->ExceptionCode != EXCEPTION_BREAKPOINT ||
-            reinterpret_cast<std::uintptr_t>(exceptionInfo->ExceptionRecord->ExceptionAddress) != g_transportSendAddress ||
+            reinterpret_cast<std::uintptr_t>(exceptionInfo->ExceptionRecord->ExceptionAddress) != address ||
             !g_breakpointArmed.load())
         {
             return EXCEPTION_CONTINUE_SEARCH;
         }
 
         g_transportInstance.store(reinterpret_cast<void*>(exceptionInfo->ContextRecord->Rcx));
-        g_transportCaptured.store(true);
         RestoreCaptureBreakpoint();
+
+        Log("TransportService instance captured: 0x%llX",
+            static_cast<unsigned long long>(reinterpret_cast<std::uintptr_t>(g_transportInstance.load())));
 
         // INT3 advances RIP by one byte. We restored the original first byte, so
         // restart execution at the function entry and let STR continue normally.
-        exceptionInfo->ContextRecord->Rip = static_cast<DWORD64>(g_transportSendAddress);
+        exceptionInfo->ContextRecord->Rip = static_cast<DWORD64>(address);
         return EXCEPTION_CONTINUE_EXECUTION;
     }
 
     bool ArmTransportCaptureBreakpoint()
     {
-        if (g_transportSendAddress == 0 || g_breakpointArmed.load())
+        const auto address = g_transportSendAddress.load();
+        if (address == 0 || g_breakpointArmed.load() || g_transportInstance.load())
             return false;
 
         if (!g_vectoredHandler)
@@ -462,11 +470,13 @@ namespace
                 return false;
         }
 
-        g_originalTransportByte = *reinterpret_cast<const std::uint8_t*>(g_transportSendAddress);
-        if (!PatchByte(g_transportSendAddress, 0xCC))
-            return false;
-
+        g_originalTransportByte = *reinterpret_cast<const std::uint8_t*>(address);
         g_breakpointArmed.store(true);
+        if (!PatchByte(address, 0xCC))
+        {
+            g_breakpointArmed.store(false);
+            return false;
+        }
         return true;
     }
 
@@ -592,11 +602,12 @@ namespace
 
     bool InvokeTransportSendUnsafe(void* transport, const void* message) noexcept
     {
-        if (!transport || !message || g_transportSendAddress == 0)
+        const auto address = g_transportSendAddress.load();
+        if (!transport || !message || address == 0)
             return false;
 
         using TransportSendFn = bool(__fastcall*)(void*, const void*);
-        const auto function = reinterpret_cast<TransportSendFn>(g_transportSendAddress);
+        const auto function = reinterpret_cast<TransportSendFn>(address);
 
 #if defined(_MSC_VER)
         __try
@@ -615,7 +626,7 @@ namespace
     bool SendEnvelopeThroughSTR(const std::string& envelope)
     {
         auto* transport = g_transportInstance.load();
-        if (!transport || g_transportSendAddress == 0)
+        if (!transport || g_transportSendAddress.load() == 0)
             return false;
 
         BridgeChatMessage message(envelope);
@@ -731,18 +742,8 @@ namespace
         return result;
     }
 
-    void ProbeSTR180()
+    void LogResolverDetails()
     {
-        FILE* truncate = nullptr;
-        fopen_s(&truncate, "Data\\SKSE\\Plugins\\STRPluginMessagingBridge.log", "w");
-        if (truncate)
-            fclose(truncate);
-
-        Log("STRPM bridge resolver target: %s", kTargetBuild);
-        Log("source tag: tiltedphoques/TiltedEvolution v1.8.0 (9c23efa422bbc1e5c06eef5522ca73971a513e35)");
-        Log("Nexus public exe SHA-256: 77f23c9c82c412252b5c4491a09d7ab4349cbc6c77992c4766882f54798cb99d");
-
-        const bool resolved = ResolveProcessChatMessage();
         Log("mapped memory spans considered: %zu", g_memory.size());
         Log("send-chat anchor copies outside bridge module: %zu", g_anchorAddresses.size());
         for (const auto address : g_anchorAddresses)
@@ -778,15 +779,100 @@ namespace
                     has64k ? " [contains-0x10000]" : "");
             }
         }
+    }
 
-        if (g_transportSendAddress)
+    void BootstrapLoop()
+    {
+        bool loggedSendFailure = false;
+        bool loggedReceiveFailure = false;
+
+        while (!g_bootstrapStop.load())
         {
-            Log("TransportService::Send candidate: 0x%llX module=%s",
-                static_cast<unsigned long long>(g_transportSendAddress),
-                ModuleNameForAddress(g_transportSendAddress).c_str());
-        }
+            if (!g_sendResolverReady.load())
+            {
+                if (ResolveProcessChatMessage())
+                {
+                    g_sendResolverReady.store(true);
+                    loggedSendFailure = false;
+                    const auto address = g_transportSendAddress.load();
+                    Log("TransportService::Send resolved: 0x%llX module=%s",
+                        static_cast<unsigned long long>(address),
+                        ModuleNameForAddress(address).c_str());
+                    LogResolverDetails();
+                }
+                else if (!loggedSendFailure)
+                {
+                    Log("send resolver waiting for mapped STR 1.8.0 runtime");
+                    loggedSendFailure = true;
+                }
+            }
 
-        Log("resolver status: %s", resolved ? "send target resolved" : "not resolved");
+            if (g_sendResolverReady.load() && !g_transportInstance.load() && !g_breakpointArmed.load())
+            {
+                if (ArmTransportCaptureBreakpoint())
+                    Log("temporary TransportService::Send capture breakpoint armed");
+            }
+
+            if (!g_receiveResolverReady.load())
+            {
+                STRPM::ReceiveCallback callback = nullptr;
+                void* userData = nullptr;
+                {
+                    std::scoped_lock lock(g_lock);
+                    callback = g_callback;
+                    userData = g_userData;
+                }
+
+                if (callback && STRPMBridgeReceive::Start(callback, userData))
+                {
+                    g_receiveResolverReady.store(true);
+                    loggedReceiveFailure = false;
+                    Log("STRPM receive path resolved and armed");
+                }
+                else if (!loggedReceiveFailure)
+                {
+                    Log("receive resolver waiting for NotifyChatMessageBroadcast runtime RTTI");
+                    loggedReceiveFailure = true;
+                }
+            }
+
+            if (g_transportInstance.load() && g_receiveResolverReady.load())
+            {
+                Log("STRPM bridge ready: native STR send captured and receive hook armed");
+                return;
+            }
+
+            std::this_thread::sleep_for(kBootstrapRetryDelay);
+        }
+    }
+
+    bool StartBootstrap()
+    {
+        bool expected = false;
+        if (!g_bootstrapStarted.compare_exchange_strong(expected, true))
+            return true;
+
+        g_bootstrapStop.store(false);
+        try
+        {
+            g_bootstrapThread = std::thread(&BootstrapLoop);
+        }
+        catch (...)
+        {
+            g_bootstrapStarted.store(false);
+            return false;
+        }
+        return true;
+    }
+
+    void StopBootstrap()
+    {
+        if (!g_bootstrapStarted.exchange(false))
+            return;
+
+        g_bootstrapStop.store(true);
+        if (g_bootstrapThread.joinable())
+            g_bootstrapThread.join();
     }
 
     STRPM::Result STRPM_CALL Start(STRPM::ReceiveCallback callback, void* userData)
@@ -800,26 +886,33 @@ namespace
             g_userData = userData;
         }
 
-        ProbeSTR180();
-        if (g_transportSendAddress == 0)
-            return STRPM::Result::kNotConnected;
+        FILE* truncate = nullptr;
+        fopen_s(&truncate, "Data\\SKSE\\Plugins\\STRPluginMessagingBridge.log", "w");
+        if (truncate)
+            fclose(truncate);
 
-        if (g_transportInstance.load())
-            return STRPM::Result::kOk;
+        Log("STRPM bridge starting for %s", kTargetBuild);
+        Log("source tag: tiltedphoques/TiltedEvolution v1.8.0 (9c23efa422bbc1e5c06eef5522ca73971a513e35)");
+        Log("Nexus public exe SHA-256: 77f23c9c82c412252b5c4491a09d7ab4349cbc6c77992c4766882f54798cb99d");
 
-        if (!ArmTransportCaptureBreakpoint())
+        // The official executable maps/unpacks the actual client runtime during
+        // startup. Keep the bridge active and resolve lazily instead of failing if
+        // the runtime image is not present during the SKSE plugin load phase.
+        if (!StartBootstrap())
         {
-            Log("failed to arm temporary TransportService::Send capture breakpoint");
-            return STRPM::Result::kNotConnected;
+            Log("failed to start STRPM bridge bootstrap thread");
+            return STRPM::Result::kTransportError;
         }
 
-        Log("temporary transport capture breakpoint armed; waiting for first natural STR send");
         return STRPM::Result::kOk;
     }
 
     STRPM::Result STRPM_CALL Stop()
     {
+        StopBootstrap();
+        STRPMBridgeReceive::Stop();
         RestoreCaptureBreakpoint();
+
         if (g_vectoredHandler)
         {
             RemoveVectoredExceptionHandler(g_vectoredHandler);
@@ -827,7 +920,9 @@ namespace
         }
 
         g_transportInstance.store(nullptr);
-        g_transportCaptured.store(false);
+        g_transportSendAddress.store(0);
+        g_sendResolverReady.store(false);
+        g_receiveResolverReady.store(false);
 
         std::scoped_lock lock(g_lock);
         g_callback = nullptr;
@@ -849,7 +944,7 @@ namespace
         if (target.kind == STRPM::TargetKind::kHost)
             return STRPM::Result::kTargetNotFound;
 
-        if (!g_transportInstance.load())
+        if (!g_transportInstance.load() || !g_receiveResolverReady.load())
             return STRPM::Result::kNotConnected;
 
         const auto sequence = g_sequence.fetch_add(1);
@@ -878,8 +973,8 @@ namespace
 
     STRPM::Result STRPM_CALL GetLocalConnectionID(STRPM::ConnectionID*)
     {
-        // Local player ID resolution is separate from the send bootstrap and is
-        // intentionally left fail-safe until the ConnectedEvent path is resolved.
+        // Local player ID resolution is not required for the first transport test.
+        // Sender IDs delivered to peers come from the authenticated server relay.
         return STRPM::Result::kNotConnected;
     }
 
