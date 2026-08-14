@@ -7,11 +7,16 @@
 
 #include <algorithm>
 #include <atomic>
+#include <charconv>
+#include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <mutex>
 #include <optional>
 #include <string>
+#include <string_view>
+#include <unordered_map>
 #include <vector>
 
 namespace STRPMBridgeReceive
@@ -20,6 +25,10 @@ namespace STRPMBridgeReceive
     {
         constexpr char kStructTypeName[] = ".?AUNotifyChatMessageBroadcast@@";
         constexpr char kClassTypeName[] = ".?AVNotifyChatMessageBroadcast@@";
+        constexpr std::string_view kEnvelopePrefix = "STRPM|v2|";
+        constexpr std::size_t kMaxFragments = 64;
+        constexpr std::size_t kMaxPendingMessages = 128;
+        constexpr auto kPendingLifetime = std::chrono::seconds(30);
 
         struct MemorySpan
         {
@@ -57,9 +66,26 @@ namespace STRPMBridgeReceive
             ShadowBuffer* buffer{ nullptr };
         };
 
+        struct PendingMessage
+        {
+            std::string channel;
+            std::string senderName;
+            STRPM::ConnectionID senderId{ 0 };
+            std::uint32_t flags{ 0 };
+            std::uint64_t sequence{ 0 };
+            std::size_t partCount{ 0 };
+            std::vector<std::string> payloadHexParts;
+            std::vector<bool> received;
+            std::chrono::steady_clock::time_point lastUpdate{};
+        };
+
         HMODULE g_selfModule = nullptr;
         std::vector<MemorySpan> g_memory;
-        ChatEnvelopeCallback g_callback = nullptr;
+        STRPM::ReceiveCallback g_callback = nullptr;
+        void* g_userData = nullptr;
+        std::mutex g_pendingLock;
+        std::unordered_map<std::string, PendingMessage> g_pending;
+
         std::uintptr_t g_deserializeAddress = 0;
         std::uint8_t g_originalByte = 0;
         std::atomic<bool> g_breakpointArmed{ false };
@@ -485,7 +511,200 @@ namespace STRPMBridgeReceive
             if (!ReadString(reader, playerName) || !ReadString(reader, chatMessage))
                 return false;
 
-            return chatMessage.rfind("STRPM|v2|", 0) == 0;
+            return chatMessage.starts_with(kEnvelopePrefix);
+        }
+
+        std::optional<std::string_view> ReadField(std::string_view packet, std::string_view key)
+        {
+            std::size_t start = 0;
+            while (start <= packet.size())
+            {
+                auto end = packet.find('|', start);
+                if (end == std::string_view::npos)
+                    end = packet.size();
+
+                const auto token = packet.substr(start, end - start);
+                if (token.size() > key.size() && token.starts_with(key) && token[key.size()] == '=')
+                    return token.substr(key.size() + 1);
+
+                if (end == packet.size())
+                    break;
+                start = end + 1;
+            }
+            return std::nullopt;
+        }
+
+        template <class T>
+        std::optional<T> ParseUnsigned(std::string_view text)
+        {
+            T value{};
+            const auto* begin = text.data();
+            const auto* end = begin + text.size();
+            const auto parsed = std::from_chars(begin, end, value);
+            if (parsed.ec != std::errc{} || parsed.ptr != end)
+                return std::nullopt;
+            return value;
+        }
+
+        int HexValue(char c)
+        {
+            if (c >= '0' && c <= '9') return c - '0';
+            if (c >= 'a' && c <= 'f') return 10 + c - 'a';
+            if (c >= 'A' && c <= 'F') return 10 + c - 'A';
+            return -1;
+        }
+
+        std::optional<std::vector<std::uint8_t>> HexDecode(std::string_view text)
+        {
+            if ((text.size() & 1u) != 0)
+                return std::nullopt;
+
+            std::vector<std::uint8_t> result(text.size() / 2);
+            for (std::size_t i = 0; i < result.size(); ++i)
+            {
+                const int hi = HexValue(text[i * 2]);
+                const int lo = HexValue(text[i * 2 + 1]);
+                if (hi < 0 || lo < 0)
+                    return std::nullopt;
+                result[i] = static_cast<std::uint8_t>((hi << 4) | lo);
+            }
+            return result;
+        }
+
+        void CleanupPendingLocked(std::chrono::steady_clock::time_point now)
+        {
+            for (auto it = g_pending.begin(); it != g_pending.end();)
+            {
+                if (now - it->second.lastUpdate > kPendingLifetime)
+                    it = g_pending.erase(it);
+                else
+                    ++it;
+            }
+
+            while (g_pending.size() > kMaxPendingMessages)
+                g_pending.erase(g_pending.begin());
+        }
+
+        struct CompletedMessage
+        {
+            std::string channel;
+            std::string senderName;
+            STRPM::ConnectionID senderId{ 0 };
+            std::uint32_t flags{ 0 };
+            std::uint64_t sequence{ 0 };
+            std::vector<std::uint8_t> payload;
+        };
+
+        std::optional<CompletedMessage> AddFragment(std::string_view envelope, std::string_view fallbackPlayerName)
+        {
+            const auto messageId = ReadField(envelope, "msg");
+            const auto channel = ReadField(envelope, "channel");
+            const auto sender = ReadField(envelope, "sender");
+            const auto senderName = ReadField(envelope, "senderName");
+            const auto sequence = ReadField(envelope, "seq");
+            const auto flags = ReadField(envelope, "flags");
+            const auto part = ReadField(envelope, "part");
+            const auto parts = ReadField(envelope, "parts");
+            const auto payload = ReadField(envelope, "payload");
+
+            if (!messageId || !channel || !sender || !sequence || !flags || !part || !parts || !payload)
+                return std::nullopt;
+
+            const auto senderIdValue = ParseUnsigned<STRPM::ConnectionID>(*sender);
+            const auto sequenceValue = ParseUnsigned<std::uint64_t>(*sequence);
+            const auto flagsValue = ParseUnsigned<std::uint32_t>(*flags);
+            const auto partValue = ParseUnsigned<std::size_t>(*part);
+            const auto partsValue = ParseUnsigned<std::size_t>(*parts);
+            if (!senderIdValue || !sequenceValue || !flagsValue || !partValue || !partsValue ||
+                *senderIdValue == 0 || *partValue == 0 || *partsValue == 0 ||
+                *partValue > *partsValue || *partsValue > kMaxFragments ||
+                channel->empty() || channel->size() > STRPM::kMaxChannelLength)
+            {
+                return std::nullopt;
+            }
+
+            const std::string key = std::to_string(*senderIdValue) + "|" + std::string(*messageId);
+            const auto now = std::chrono::steady_clock::now();
+
+            std::string combinedHex;
+            CompletedMessage completed{};
+            {
+                std::scoped_lock lock(g_pendingLock);
+                CleanupPendingLocked(now);
+
+                auto [it, inserted] = g_pending.try_emplace(key);
+                auto& pending = it->second;
+                if (inserted)
+                {
+                    pending.channel = *channel;
+                    pending.senderName = senderName ? std::string(*senderName) : std::string(fallbackPlayerName);
+                    pending.senderId = *senderIdValue;
+                    pending.flags = *flagsValue;
+                    pending.sequence = *sequenceValue;
+                    pending.partCount = *partsValue;
+                    pending.payloadHexParts.resize(*partsValue);
+                    pending.received.resize(*partsValue, false);
+                }
+                else if (pending.channel != *channel || pending.senderId != *senderIdValue ||
+                         pending.flags != *flagsValue || pending.sequence != *sequenceValue ||
+                         pending.partCount != *partsValue)
+                {
+                    g_pending.erase(it);
+                    return std::nullopt;
+                }
+
+                pending.lastUpdate = now;
+                const auto index = *partValue - 1;
+                pending.payloadHexParts[index] = *payload;
+                pending.received[index] = true;
+
+                if (!std::all_of(pending.received.begin(), pending.received.end(), [](bool value) { return value; }))
+                    return std::nullopt;
+
+                std::size_t totalHex = 0;
+                for (const auto& fragment : pending.payloadHexParts)
+                    totalHex += fragment.size();
+                if (totalHex > static_cast<std::size_t>(STRPM::kMaxPayloadBytes) * 2)
+                {
+                    g_pending.erase(it);
+                    return std::nullopt;
+                }
+
+                combinedHex.reserve(totalHex);
+                for (const auto& fragment : pending.payloadHexParts)
+                    combinedHex += fragment;
+
+                completed.channel = pending.channel;
+                completed.senderName = pending.senderName;
+                completed.senderId = pending.senderId;
+                completed.flags = pending.flags;
+                completed.sequence = pending.sequence;
+                g_pending.erase(it);
+            }
+
+            const auto decoded = HexDecode(combinedHex);
+            if (!decoded || decoded->size() > STRPM::kMaxPayloadBytes)
+                return std::nullopt;
+            completed.payload = *decoded;
+            return completed;
+        }
+
+        void DeliverEnvelope(std::string_view playerName, std::string_view envelope)
+        {
+            const auto completed = AddFragment(envelope, playerName);
+            if (!completed || !g_callback)
+                return;
+
+            STRPM::Message message{};
+            message.channel = completed->channel.c_str();
+            message.data = completed->payload.empty() ? nullptr : completed->payload.data();
+            message.size = completed->payload.size();
+            message.sender.connectionID = completed->senderId;
+            message.sender.displayName = completed->senderName.c_str();
+            message.sender.isHost = false;
+            message.flags = completed->flags;
+            message.sequence = completed->sequence;
+            g_callback(&message, g_userData);
         }
 
         LONG CALLBACK ReceiveExceptionHandler(EXCEPTION_POINTERS* exceptionInfo)
@@ -513,13 +732,13 @@ namespace STRPMBridgeReceive
             auto* reader = reinterpret_cast<ShadowReader*>(exceptionInfo->ContextRecord->Rdx);
             std::string playerName;
             std::string chatMessage;
-            if (PeekChatEnvelope(reader, playerName, chatMessage) && g_callback)
-                g_callback(playerName, chatMessage);
+            if (PeekChatEnvelope(reader, playerName, chatMessage))
+                DeliverEnvelope(playerName, chatMessage);
 
             // Let STR execute DeserializeRaw normally, then restore the breakpoint
-            // after exactly one instruction. Suppression from the visible CEF chat
-            // is handled at a later hook point; this stage establishes reliable
-            // receive callbacks first.
+            // after exactly one instruction. A later hook point will suppress the
+            // internal STRPM envelope from the visible CEF chat; this breakpoint is
+            // responsible only for reliable transport delivery.
             PatchByte(g_deserializeAddress, g_originalByte);
             g_rearmAfterSingleStep = true;
             exceptionInfo->ContextRecord->EFlags |= 0x100u;
@@ -550,9 +769,13 @@ namespace STRPMBridgeReceive
         }
     }
 
-    bool Start(ChatEnvelopeCallback callback) noexcept
+    bool Start(STRPM::ReceiveCallback callback, void* userData) noexcept
     {
+        if (!callback)
+            return false;
+
         g_callback = callback;
+        g_userData = userData;
         if (!ResolveDeserializeAddress())
             return false;
         if (!ArmBreakpoint())
@@ -575,7 +798,13 @@ namespace STRPMBridgeReceive
             g_vectoredHandler = nullptr;
         }
 
+        {
+            std::scoped_lock lock(g_pendingLock);
+            g_pending.clear();
+        }
+
         g_callback = nullptr;
+        g_userData = nullptr;
         g_deserializeAddress = 0;
         g_rearmAfterSingleStep = false;
     }
