@@ -1,8 +1,8 @@
 [Resource]
 name = "STR Plugin Messaging Chat Relay"
-version = 0.1.0
+version = 0.2.0
 apiset = 1.0.0
-description = "Experimental private STRPM relay using STR server scripting chat events"
+description = "Private STRPM relay using the official Skyrim Together server scripting API"
 keywords = ["strpm", "plugin-messaging", "relay"]
 license = "MIT"
 repository = "https://github.com/Caelvanost/STRPluginMessagingAPI"
