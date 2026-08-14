@@ -74,6 +74,11 @@ if(STRPM_BUILD_STR180_BRIDGE_PROBE)
         src/STRPluginMessagingBridgeReceive.cpp
     )
     target_compile_features(STRPluginMessagingBridge PUBLIC cxx_std_20)
+    target_compile_definitions(STRPluginMessagingBridge
+        PRIVATE
+            NOMINMAX
+            WIN32_LEAN_AND_MEAN
+    )
     target_include_directories(STRPluginMessagingBridge
         PRIVATE
             ${CMAKE_CURRENT_SOURCE_DIR}/include
