@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.21)
 
 project(
     STRPluginMessagingAPI
-    VERSION 0.4.1
+    VERSION 0.4.2
     LANGUAGES CXX
 )
 
@@ -101,7 +101,13 @@ endif()
 
 if(MSVC)
     target_compile_options(STRPluginMessagingAPIClient PRIVATE /W4 /permissive- /EHsc)
-    target_compile_options(STRPluginMessagingAPIRuntime PRIVATE /W4 /permissive- /EHsc)
+    target_compile_options(STRPluginMessagingAPIRuntime
+        PRIVATE
+            /W4
+            /permissive-
+            /EHsc
+            /FI${CMAKE_CURRENT_SOURCE_DIR}/src/STRPMRuntimeLoadRedirect.h
+    )
     if(STRPM_BUILD_STR180_BRIDGE_PROBE)
         target_compile_options(STRPluginMessagingBridge
             PRIVATE
