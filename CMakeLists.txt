@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.21)
 
 project(
     STRPluginMessagingAPI
-    VERSION 0.4.7
+    VERSION 0.4.8
     LANGUAGES CXX
 )
 
@@ -267,10 +267,52 @@ if(STRPM_BUILD_STR180_BRIDGE_PROBE)
             "${STRPM_BRIDGE_SOURCE_TEXT}"
         )
 
-        set(STRPM_RESOLVER_FAILURE_MARKER "                    Log(\"send resolver waiting for mapped STR 1.8.0 runtime\");")
+        # v0.4.8 diagnostic-only instrumentation. Keep the resolver itself
+        # unchanged, but dump its accumulated state on the first failed pass and
+        # about every five seconds afterwards. That captures both pre-F2 startup
+        # state and the mapped runtime state after the player connects.
+        set(STRPM_BOOTSTRAP_DIAG_VAR_MARKER "        bool loggedReceiveFailure = false;")
+        string(FIND "${STRPM_BRIDGE_SOURCE_TEXT}" "${STRPM_BOOTSTRAP_DIAG_VAR_MARKER}" STRPM_BOOTSTRAP_DIAG_VAR_POS)
+        if(STRPM_BOOTSTRAP_DIAG_VAR_POS EQUAL -1)
+            message(FATAL_ERROR "Unable to locate BootstrapLoop diagnostic variables")
+        endif()
         string(REPLACE
-            "${STRPM_RESOLVER_FAILURE_MARKER}"
-            "                    Log(\"send resolver pass failed in %llu ms; waiting for mapped STR 1.8.0 runtime\", static_cast<unsigned long long>(GetTickCount64() - resolverStartedAt));"
+            "${STRPM_BOOTSTRAP_DIAG_VAR_MARKER}"
+            "        bool loggedReceiveFailure = false;\n        ULONGLONG lastResolverDiagnosticAt = 0;"
+            STRPM_BRIDGE_SOURCE_TEXT
+            "${STRPM_BRIDGE_SOURCE_TEXT}"
+        )
+
+        set(STRPM_FAILURE_BLOCK [=[                else if (!loggedSendFailure)
+                {
+                    Log("send resolver waiting for mapped STR 1.8.0 runtime");
+                    loggedSendFailure = true;
+                }]=])
+        set(STRPM_DIAGNOSTIC_FAILURE_BLOCK [=[                else
+                {
+                    const auto resolverFailedAt = GetTickCount64();
+                    const bool shouldLogResolverDiagnostic =
+                        !loggedSendFailure ||
+                        lastResolverDiagnosticAt == 0 ||
+                        resolverFailedAt - lastResolverDiagnosticAt >= 5000;
+
+                    if (shouldLogResolverDiagnostic)
+                    {
+                        Log("send resolver diagnostic snapshot after failed pass:");
+                        LogResolverDetails();
+                        Log("send resolver pass failed in %llu ms; waiting for mapped STR 1.8.0 runtime",
+                            static_cast<unsigned long long>(resolverFailedAt - resolverStartedAt));
+                        lastResolverDiagnosticAt = resolverFailedAt;
+                    }
+                    loggedSendFailure = true;
+                }]=])
+        string(FIND "${STRPM_BRIDGE_SOURCE_TEXT}" "${STRPM_FAILURE_BLOCK}" STRPM_FAILURE_BLOCK_POS)
+        if(STRPM_FAILURE_BLOCK_POS EQUAL -1)
+            message(FATAL_ERROR "Unable to locate resolver failure block")
+        endif()
+        string(REPLACE
+            "${STRPM_FAILURE_BLOCK}"
+            "${STRPM_DIAGNOSTIC_FAILURE_BLOCK}"
             STRPM_BRIDGE_SOURCE_TEXT
             "${STRPM_BRIDGE_SOURCE_TEXT}"
         )
