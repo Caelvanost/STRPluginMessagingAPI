@@ -1,6 +1,7 @@
 #include "SKSEPluginVersionCompat.h"
 
 #include <cstdint>
+#include <cstdio>
 
 struct SKSEInterface;
 
@@ -19,8 +20,14 @@ extern "C" __declspec(dllexport) STRPMSKSE::PluginVersionData SKSEPlugin_Version
 
 extern "C" __declspec(dllexport) bool SKSEPlugin_Load(const SKSEInterface*)
 {
-    // The bridge is initialized by STRPluginMessagingAPI through
-    // STRPM_QueryTransportInterface. Loading it through SKSE only guarantees a
-    // stable module location independent of the process working directory.
+    FILE* file = nullptr;
+    fopen_s(&file, "Data\\SKSE\\Plugins\\STRPluginMessagingBridge.log", "a");
+    if (file != nullptr) {
+        std::fprintf(file, "STRPluginMessagingBridge v0.4.1: SKSEPlugin_Load entered\n");
+        std::fclose(file);
+    }
+
+    // The transport hooks are initialized later by STRPluginMessagingAPI via
+    // STRPM_QueryTransportInterface.
     return true;
 }
