@@ -2,7 +2,7 @@
 
 Shared messaging broker for Skyrim Together Reborn compatibility mods.
 
-Current development version: **v0.4.5**.
+Current development version: **v0.4.6**.
 
 The project provides one common API for SKSE mods that need to exchange small,
 namespaced messages between Skyrim Together players. The current implementation
@@ -109,12 +109,13 @@ Implemented:
 - authenticated sender ID/name extraction from server-appended metadata;
 - delivery of completed payloads through the STRPM receive callback;
 - lazy bootstrap so the bridge can load before the player connects through F2;
-- v0.4.3 startup guard: the receive RTTI resolver remains deferred until the
-  send resolver has positively identified the mapped STR 1.8.0 runtime;
-- v0.4.5 resolver guard: the complete send resolver probe is wrapped in a
-  dedicated SEH boundary, so transient memory-remap access violations become a
-  failed probe and the existing bootstrap retry can continue instead of
-  crashing Skyrim;
+- receive RTTI resolution remains deferred until the send resolver has positively
+  identified the mapped STR 1.8.0 runtime;
+- v0.4.6 snapshot resolver: candidate memory spans and function bodies are copied
+  through `ReadProcessMemory` and parsed from local buffers instead of being read
+  directly while STR is still unpacking/remapping its private runtime mappings;
+- a whole-resolver SEH boundary remains as a final fallback for transient Win32
+  faults, while failed snapshots simply defer resolution to the next 750 ms retry;
 - fail-safe behavior when runtime resolution is incomplete;
 - Windows CI build validation and DLL artifact generation.
 
@@ -194,7 +195,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\build-vortex.ps1
 The generated archive is written to:
 
 ```text
-dist/STRPluginMessagingAPI-v0.4.5-Vortex.zip
+dist/STRPluginMessagingAPI-v0.4.6-Vortex.zip
 ```
 
 `dist/` is ignored by Git.
@@ -230,7 +231,7 @@ retries periodically and follows this order:
 SKSE loads STRPM
         |
         v
-send resolver waits for mapped STR 1.8.0 runtime
+send resolver snapshots candidate STR memory
         |
         v
 TransportService::Send resolved
@@ -245,10 +246,10 @@ NotifyChatMessageBroadcast receive hook armed
 ```
 
 The receive resolver is deliberately not allowed to scan before the send
-resolver confirms that the STR runtime is present. During early startup the
-entire send resolver probe is contained by an SEH guard: if STR remaps a memory
-region during the scan, that pass fails closed and the bootstrap retries later
-instead of letting an access violation escape into Skyrim.
+resolver confirms that the STR runtime is present. During early startup, send
+resolver parsing is performed only on local snapshots copied with
+`ReadProcessMemory`; if a candidate region is remapped while it is being copied,
+that resolver pass fails closed and the bootstrap retries later.
 
 ## Repository Layout
 
