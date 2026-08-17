@@ -2,7 +2,7 @@
 
 Shared messaging broker for Skyrim Together Reborn compatibility mods.
 
-Current development version: **v0.4.3**.
+Current development version: **v0.4.4**.
 
 The project provides one common API for SKSE mods that need to exchange small,
 namespaced messages between Skyrim Together players. The current implementation
@@ -111,6 +111,8 @@ Implemented:
 - lazy bootstrap so the bridge can load before the player connects through F2;
 - v0.4.3 startup guard: the receive RTTI resolver remains deferred until the
   send resolver has positively identified the mapped STR 1.8.0 runtime;
+- v0.4.4 startup scan guard: memory comparisons fail closed if STR remaps or
+  releases a region while the send resolver is scanning it;
 - fail-safe behavior when runtime resolution is incomplete;
 - Windows CI build validation and DLL artifact generation.
 
@@ -190,7 +192,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\build-vortex.ps1
 The generated archive is written to:
 
 ```text
-dist/STRPluginMessagingAPI-v0.4.3-Vortex.zip
+dist/STRPluginMessagingAPI-v0.4.4-Vortex.zip
 ```
 
 `dist/` is ignored by Git.
@@ -241,8 +243,9 @@ NotifyChatMessageBroadcast receive hook armed
 ```
 
 The receive resolver is deliberately not allowed to scan before the send
-resolver confirms that the STR runtime is present. This avoids unsafe startup
-scans while the STR client runtime is not yet mapped.
+resolver confirms that the STR runtime is present. During early startup the send
+resolver also treats transient memory-remap faults as a failed scan and retries
+later instead of letting an access violation escape into Skyrim.
 
 ## Repository Layout
 
