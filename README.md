@@ -2,7 +2,7 @@
 
 Shared messaging broker for Skyrim Together Reborn compatibility mods.
 
-Current development version: **v0.4.6**.
+Current development version: **v0.4.7**.
 
 The project provides one common API for SKSE mods that need to exchange small,
 namespaced messages between Skyrim Together players. The current implementation
@@ -111,11 +111,11 @@ Implemented:
 - lazy bootstrap so the bridge can load before the player connects through F2;
 - receive RTTI resolution remains deferred until the send resolver has positively
   identified the mapped STR 1.8.0 runtime;
-- v0.4.6 snapshot resolver: candidate memory spans and function bodies are copied
-  through `ReadProcessMemory` and parsed from local buffers instead of being read
-  directly while STR is still unpacking/remapping its private runtime mappings;
-- a whole-resolver SEH boundary remains as a final fallback for transient Win32
-  faults, while failed snapshots simply defer resolution to the next 750 ms retry;
+- v0.4.7 chunked snapshot resolver: candidate memory is copied through
+  `ReadProcessMemory` in bounded 1 MiB chunks and then scanned only from local
+  buffers, avoiding both startup AVs and the per-comparison RPM cost of v0.4.6;
+- explicit resolver-pass timing diagnostics so a slow or failed scan is visible
+  in `STRPluginMessagingBridge.log`;
 - fail-safe behavior when runtime resolution is incomplete;
 - Windows CI build validation and DLL artifact generation.
 
@@ -195,7 +195,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\build-vortex.ps1
 The generated archive is written to:
 
 ```text
-dist/STRPluginMessagingAPI-v0.4.6-Vortex.zip
+dist/STRPluginMessagingAPI-v0.4.7-Vortex.zip
 ```
 
 `dist/` is ignored by Git.
@@ -231,7 +231,7 @@ retries periodically and follows this order:
 SKSE loads STRPM
         |
         v
-send resolver snapshots candidate STR memory
+send resolver snapshots candidate STR memory in 1 MiB chunks
         |
         v
 TransportService::Send resolved
@@ -247,9 +247,11 @@ NotifyChatMessageBroadcast receive hook armed
 
 The receive resolver is deliberately not allowed to scan before the send
 resolver confirms that the STR runtime is present. During early startup, send
-resolver parsing is performed only on local snapshots copied with
-`ReadProcessMemory`; if a candidate region is remapped while it is being copied,
-that resolver pass fails closed and the bootstrap retries later.
+resolver parsing is performed only on bounded local snapshots copied with
+`ReadProcessMemory`; if a candidate chunk is remapped while it is being copied,
+that chunk is skipped and the bootstrap retries later. Comparisons inside a
+snapshot are ordinary local-memory comparisons and do not call
+`ReadProcessMemory` again.
 
 ## Repository Layout
 
