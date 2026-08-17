@@ -794,6 +794,7 @@ namespace
                 {
                     g_sendResolverReady.store(true);
                     loggedSendFailure = false;
+                    loggedReceiveFailure = false;
                     const auto address = g_transportSendAddress.load();
                     Log("TransportService::Send resolved: 0x%llX module=%s",
                         static_cast<unsigned long long>(address),
@@ -815,24 +816,35 @@ namespace
 
             if (!g_receiveResolverReady.load())
             {
-                STRPM::ReceiveCallback callback = nullptr;
-                void* userData = nullptr;
+                if (!g_sendResolverReady.load())
                 {
-                    std::scoped_lock lock(g_lock);
-                    callback = g_callback;
-                    userData = g_userData;
+                    if (!loggedReceiveFailure)
+                    {
+                        Log("receive resolver deferred until STR runtime is mapped");
+                        loggedReceiveFailure = true;
+                    }
                 }
+                else
+                {
+                    STRPM::ReceiveCallback callback = nullptr;
+                    void* userData = nullptr;
+                    {
+                        std::scoped_lock lock(g_lock);
+                        callback = g_callback;
+                        userData = g_userData;
+                    }
 
-                if (callback && STRPMBridgeReceive::Start(callback, userData))
-                {
-                    g_receiveResolverReady.store(true);
-                    loggedReceiveFailure = false;
-                    Log("STRPM receive path resolved and armed");
-                }
-                else if (!loggedReceiveFailure)
-                {
-                    Log("receive resolver waiting for NotifyChatMessageBroadcast runtime RTTI");
-                    loggedReceiveFailure = true;
+                    if (callback && STRPMBridgeReceive::Start(callback, userData))
+                    {
+                        g_receiveResolverReady.store(true);
+                        loggedReceiveFailure = false;
+                        Log("STRPM receive path resolved and armed");
+                    }
+                    else if (!loggedReceiveFailure)
+                    {
+                        Log("receive resolver waiting for NotifyChatMessageBroadcast runtime RTTI");
+                        loggedReceiveFailure = true;
+                    }
                 }
             }
 
