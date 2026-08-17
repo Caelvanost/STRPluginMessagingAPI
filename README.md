@@ -2,6 +2,8 @@
 
 Shared messaging broker for Skyrim Together Reborn compatibility mods.
 
+Current development version: **v0.4.3**.
+
 The project provides one common API for SKSE mods that need to exchange small,
 namespaced messages between Skyrim Together players. The current implementation
 targets the **official Skyrim Together Reborn 1.8.0 client and server** and uses
@@ -85,9 +87,8 @@ Client mods never need to know STR internal addresses.
 ## Current Status
 
 The project is now at the **first native STR 1.8.0 send/receive prototype**.
-It compiles successfully with MSVC 19.51 / Visual Studio 2026 in GitHub Actions,
-but still requires an in-game two-client validation before it should be treated
-as production-ready.
+It compiles with MSVC / Visual Studio 2026 and still requires in-game two-client
+validation before it should be treated as production-ready.
 
 Implemented:
 
@@ -107,8 +108,9 @@ Implemented:
 - non-destructive receive parsing directly from STR's `Buffer::Reader`;
 - authenticated sender ID/name extraction from server-appended metadata;
 - delivery of completed payloads through the STRPM receive callback;
-- lazy bootstrap so the bridge can load before STR finishes mapping its client
-  runtime;
+- lazy bootstrap so the bridge can load before the player connects through F2;
+- v0.4.3 startup guard: the receive RTTI resolver remains deferred until the
+  send resolver has positively identified the mapped STR 1.8.0 runtime;
 - fail-safe behavior when runtime resolution is incomplete;
 - Windows CI build validation and DLL artifact generation.
 
@@ -188,7 +190,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\build-vortex.ps1
 The generated archive is written to:
 
 ```text
-dist/STRPluginMessagingAPI-v<version>-Vortex.zip
+dist/STRPluginMessagingAPI-v0.4.3-Vortex.zip
 ```
 
 `dist/` is ignored by Git.
@@ -198,21 +200,49 @@ dist/STRPluginMessagingAPI-v<version>-Vortex.zip
 ```text
 Data/SKSE/Plugins/STRPluginMessagingAPI.dll
 Data/SKSE/Plugins/STRPluginMessagingAPI.ini
-Data/SkyrimTogetherReborn/STRPluginMessagingBridge.dll
+Data/SKSE/Plugins/STRPluginMessagingBridge.dll
 ```
 
-The auxiliary bridge intentionally stays outside `Data/SKSE/Plugins`: SKSE
-should load the broker DLL, while the broker itself loads the bridge.
+Both DLLs are valid SKSE plugins. The broker resolves the bridge by module name
+relative to its own directory, so startup does not depend on the SKSE plugin
+load order or on the process current working directory.
 
 The default INI points to:
 
 ```ini
 [Transport]
 Mode=STR
-STRBridgeModule=Data\SkyrimTogetherReborn\STRPluginMessagingBridge.dll
+STRBridgeModule=STRPluginMessagingBridge.dll
 ```
 
 No legacy UDP port is opened by the packaged STR-only build.
+
+## Runtime Startup Sequence
+
+The bridge can initialize before Skyrim Together is connected. Its bootstrap
+retries periodically and follows this order:
+
+```text
+SKSE loads STRPM
+        |
+        v
+send resolver waits for mapped STR 1.8.0 runtime
+        |
+        v
+TransportService::Send resolved
+        |
+        +--> temporary capture breakpoint armed
+        |
+        v
+receive RTTI resolver starts
+        |
+        v
+NotifyChatMessageBroadcast receive hook armed
+```
+
+The receive resolver is deliberately not allowed to scan before the send
+resolver confirms that the STR runtime is present. This avoids unsafe startup
+scans while the STR client runtime is not yet mapped.
 
 ## Repository Layout
 
