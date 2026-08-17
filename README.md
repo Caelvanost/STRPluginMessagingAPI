@@ -2,7 +2,7 @@
 
 Shared messaging broker for Skyrim Together Reborn compatibility mods.
 
-Current development version: **v0.4.7**.
+Current development version: **v0.4.8**.
 
 The project provides one common API for SKSE mods that need to exchange small,
 namespaced messages between Skyrim Together players. The current implementation
@@ -116,6 +116,10 @@ Implemented:
   buffers, avoiding both startup AVs and the per-comparison RPM cost of v0.4.6;
 - explicit resolver-pass timing diagnostics so a slow or failed scan is visible
   in `STRPluginMessagingBridge.log`;
+- v0.4.8 diagnostic snapshots on failed resolver passes: memory-span, anchor,
+  RIP-xref, ProcessChatMessage and direct-CALL state is logged on the first
+  failure and roughly every five seconds afterwards, allowing pre- and post-F2
+  runtime states to be compared without changing resolver behavior;
 - fail-safe behavior when runtime resolution is incomplete;
 - Windows CI build validation and DLL artifact generation.
 
@@ -195,7 +199,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\build-vortex.ps1
 The generated archive is written to:
 
 ```text
-dist/STRPluginMessagingAPI-v0.4.7-Vortex.zip
+dist/STRPluginMessagingAPI-v0.4.8-Vortex.zip
 ```
 
 `dist/` is ignored by Git.
@@ -252,6 +256,11 @@ resolver parsing is performed only on bounded local snapshots copied with
 that chunk is skipped and the bootstrap retries later. Comparisons inside a
 snapshot are ordinary local-memory comparisons and do not call
 `ReadProcessMemory` again.
+
+When resolution fails, v0.4.8 logs the accumulated resolver state on the first
+failed pass and then about every five seconds. This is intentionally diagnostic
+only: it does not alter the signature search, candidate filtering, breakpoint
+arming, receive resolver or transport behavior.
 
 ## Repository Layout
 
