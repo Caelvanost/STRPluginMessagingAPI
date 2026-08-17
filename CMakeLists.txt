@@ -88,6 +88,11 @@ if(STRPM_BUILD_STR180_BRIDGE_PROBE)
             ${CMAKE_CURRENT_SOURCE_DIR}/include
             ${CMAKE_CURRENT_SOURCE_DIR}/src
     )
+    target_link_libraries(STRPluginMessagingBridge
+        PRIVATE
+            Shell32
+            Ole32
+    )
     set_target_properties(STRPluginMessagingBridge
         PROPERTIES
             OUTPUT_NAME STRPluginMessagingBridge
@@ -98,7 +103,13 @@ if(MSVC)
     target_compile_options(STRPluginMessagingAPIClient PRIVATE /W4 /permissive- /EHsc)
     target_compile_options(STRPluginMessagingAPIRuntime PRIVATE /W4 /permissive- /EHsc)
     if(STRPM_BUILD_STR180_BRIDGE_PROBE)
-        target_compile_options(STRPluginMessagingBridge PRIVATE /W4 /permissive- /EHsc)
+        target_compile_options(STRPluginMessagingBridge
+            PRIVATE
+                /W4
+                /permissive-
+                /EHsc
+                /FI${CMAKE_CURRENT_SOURCE_DIR}/src/STRPMLogRedirect.h
+        )
     endif()
 else()
     target_compile_options(STRPluginMessagingAPIClient PRIVATE -Wall -Wextra -Wpedantic)
