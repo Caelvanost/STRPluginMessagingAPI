@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.21)
 
 project(
     STRPluginMessagingAPI
-    VERSION 0.4.4
+    VERSION 0.4.5
     LANGUAGES CXX
 )
 
@@ -72,8 +72,67 @@ set_target_properties(STRPluginMessagingAPIRuntime
 )
 
 if(STRPM_BUILD_STR180_BRIDGE_PROBE)
+    set(STRPM_BRIDGE_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/src/STRPluginMessagingBridge.cpp")
+
+    # The STR runtime is unpacked/remapped while Skyrim is starting. A memory span
+    # can therefore disappear between VirtualQuery and a later direct read in the
+    # resolver. On MSVC, compile a generated copy with one SEH boundary around the
+    # complete resolver call. Any transient AV becomes a normal failed probe and
+    # the existing 750 ms bootstrap retry can try again once the runtime stabilizes.
+    if(MSVC)
+        file(READ "${STRPM_BRIDGE_SOURCE}" STRPM_BRIDGE_SOURCE_TEXT)
+
+        set(STRPM_BOOTSTRAP_MARKER "    void BootstrapLoop()")
+        string(FIND "${STRPM_BRIDGE_SOURCE_TEXT}" "${STRPM_BOOTSTRAP_MARKER}" STRPM_BOOTSTRAP_MARKER_POS)
+        if(STRPM_BOOTSTRAP_MARKER_POS EQUAL -1)
+            message(FATAL_ERROR "Unable to locate BootstrapLoop in STRPluginMessagingBridge.cpp")
+        endif()
+
+        set(STRPM_GUARDED_RESOLVER [=[    bool ResolveProcessChatMessageGuarded() noexcept
+    {
+#if defined(_MSC_VER)
+        __try
+        {
+            return ResolveProcessChatMessage();
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER)
+        {
+            return false;
+        }
+#else
+        return ResolveProcessChatMessage();
+#endif
+    }
+
+    void BootstrapLoop()]=])
+
+        string(REPLACE
+            "${STRPM_BOOTSTRAP_MARKER}"
+            "${STRPM_GUARDED_RESOLVER}"
+            STRPM_BRIDGE_SOURCE_TEXT
+            "${STRPM_BRIDGE_SOURCE_TEXT}"
+        )
+
+        set(STRPM_RESOLVER_CALL "if (ResolveProcessChatMessage())")
+        string(FIND "${STRPM_BRIDGE_SOURCE_TEXT}" "${STRPM_RESOLVER_CALL}" STRPM_RESOLVER_CALL_POS)
+        if(STRPM_RESOLVER_CALL_POS EQUAL -1)
+            message(FATAL_ERROR "Unable to locate resolver call in STRPluginMessagingBridge.cpp")
+        endif()
+
+        string(REPLACE
+            "${STRPM_RESOLVER_CALL}"
+            "if (ResolveProcessChatMessageGuarded())"
+            STRPM_BRIDGE_SOURCE_TEXT
+            "${STRPM_BRIDGE_SOURCE_TEXT}"
+        )
+
+        set(STRPM_GENERATED_BRIDGE "${CMAKE_CURRENT_BINARY_DIR}/STRPluginMessagingBridge.guarded.cpp")
+        file(WRITE "${STRPM_GENERATED_BRIDGE}" "${STRPM_BRIDGE_SOURCE_TEXT}")
+        set(STRPM_BRIDGE_SOURCE "${STRPM_GENERATED_BRIDGE}")
+    endif()
+
     add_library(STRPluginMessagingBridge SHARED
-        src/STRPluginMessagingBridge.cpp
+        ${STRPM_BRIDGE_SOURCE}
         src/STRPluginMessagingBridgeReceive.cpp
         src/STRPluginMessagingBridgeSKSE.cpp
     )
