@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.21)
 
 project(
     STRPluginMessagingAPI
-    VERSION 0.4.6
+    VERSION 0.4.7
     LANGUAGES CXX
 )
 
@@ -76,9 +76,9 @@ if(STRPM_BUILD_STR180_BRIDGE_PROBE)
 
     # STR 1.8.0 unpacks/remaps private runtime regions while Skyrim is starting.
     # Never scan those mappings in-place. For MSVC builds, generate a resolver
-    # variant that snapshots candidate spans through ReadProcessMemory and then
-    # parses only the local snapshots. A disappearing region therefore becomes a
-    # failed resolver pass instead of an access violation in Skyrim.
+    # variant that snapshots memory through ReadProcessMemory in bounded chunks
+    # and parses only local bytes. This avoids both startup AVs and the v0.4.6
+    # pathological cost of calling ReadProcessMemory for every 35-byte compare.
     if(MSVC)
         file(READ "${STRPM_BRIDGE_SOURCE}" STRPM_BRIDGE_SOURCE_TEXT)
 
@@ -93,7 +93,7 @@ if(STRPM_BUILD_STR180_BRIDGE_PROBE)
         std::size_t size,
         std::vector<std::uint8_t>& snapshot) noexcept
     {
-        constexpr std::size_t kMaxResolverSnapshotBytes = 64u * 1024u * 1024u;
+        constexpr std::size_t kMaxResolverSnapshotBytes = 2u * 1024u * 1024u;
         snapshot.clear();
         if (address == 0 || size == 0 || size > kMaxResolverSnapshotBytes)
             return false;
@@ -128,21 +128,13 @@ if(STRPM_BUILD_STR180_BRIDGE_PROBE)
         const void* right,
         std::size_t count) noexcept
     {
-        constexpr std::size_t kMaxCompareBytes = 64;
         if (count == 0)
             return 0;
-        if (!left || !right || count > kMaxCompareBytes)
+        if (!left || !right)
             return 1;
 
-        std::uint8_t lhs[kMaxCompareBytes]{};
-        std::uint8_t rhs[kMaxCompareBytes]{};
-        SIZE_T leftRead = 0;
-        SIZE_T rightRead = 0;
-        if (!ReadProcessMemory(GetCurrentProcess(), left, lhs, count, &leftRead) || leftRead != count)
-            return 1;
-        if (!ReadProcessMemory(GetCurrentProcess(), right, rhs, count, &rightRead) || rightRead != count)
-            return 1;
-
+        const auto* lhs = static_cast<const std::uint8_t*>(left);
+        const auto* rhs = static_cast<const std::uint8_t*>(right);
         for (std::size_t i = 0; i < count; ++i)
         {
             if (lhs[i] != rhs[i])
@@ -160,25 +152,79 @@ if(STRPM_BUILD_STR180_BRIDGE_PROBE)
             "${STRPM_BRIDGE_SOURCE_TEXT}"
         )
 
-        # FindAnchorCopies: copy each readable candidate span before searching it.
-        set(STRPM_ANCHOR_DIRECT_READ "            const auto* bytes = reinterpret_cast<const std::uint8_t*>(span.base);\n            for (std::size_t i = 0; i + needleSize <= span.size; ++i)")
-        set(STRPM_ANCHOR_SNAPSHOT_READ "            std::vector<std::uint8_t> snapshot;\n            if (!SnapshotProcessMemory(span.base, span.size, snapshot))\n                continue;\n            const auto* bytes = snapshot.data();\n            for (std::size_t i = 0; i + needleSize <= snapshot.size(); ++i)")
+        # FindAnchorCopies: scan readable spans in 1 MiB chunks with enough
+        # overlap to catch an anchor crossing a chunk boundary.
+        set(STRPM_ANCHOR_DIRECT_READ "            const auto* bytes = reinterpret_cast<const std::uint8_t*>(span.base);\n            for (std::size_t i = 0; i + needleSize <= span.size; ++i)\n            {\n                if (std::memcmp(bytes + i, needle, needleSize) == 0)\n                    g_anchorAddresses.push_back(span.base + i);\n            }")
+        set(STRPM_ANCHOR_SNAPSHOT_READ [=[            constexpr std::size_t kChunkBytes = 1u * 1024u * 1024u;
+            constexpr std::size_t kOverlapBytes = needleSize - 1;
+            for (std::size_t offset = 0; offset < span.size; offset += kChunkBytes)
+            {
+                const auto remaining = span.size - offset;
+                const auto payloadBytes = std::min(kChunkBytes, remaining);
+                const auto readBytes = std::min(remaining, payloadBytes + kOverlapBytes);
+
+                std::vector<std::uint8_t> snapshot;
+                if (!SnapshotProcessMemory(span.base + offset, readBytes, snapshot))
+                    continue;
+
+                for (std::size_t i = 0;
+                     i < payloadBytes && i + needleSize <= snapshot.size();
+                     ++i)
+                {
+                    if (CompareSnapshotBytes(snapshot.data() + i, needle, needleSize) == 0)
+                        g_anchorAddresses.push_back(span.base + offset + i);
+                }
+            }]=])
         string(FIND "${STRPM_BRIDGE_SOURCE_TEXT}" "${STRPM_ANCHOR_DIRECT_READ}" STRPM_ANCHOR_DIRECT_READ_POS)
         if(STRPM_ANCHOR_DIRECT_READ_POS EQUAL -1)
             message(FATAL_ERROR "Unable to locate anchor direct-read scan")
         endif()
         string(REPLACE "${STRPM_ANCHOR_DIRECT_READ}" "${STRPM_ANCHOR_SNAPSHOT_READ}" STRPM_BRIDGE_SOURCE_TEXT "${STRPM_BRIDGE_SOURCE_TEXT}")
 
-        # FindRipRelativeXrefs: parse executable bytes only from a local snapshot.
-        set(STRPM_XREF_DIRECT_READ "            const auto* code = reinterpret_cast<const std::uint8_t*>(span.base);\n            for (std::size_t i = 0; i + 7 <= span.size; ++i)")
-        set(STRPM_XREF_SNAPSHOT_READ "            std::vector<std::uint8_t> snapshot;\n            if (!SnapshotProcessMemory(span.base, span.size, snapshot))\n                continue;\n            const auto* code = snapshot.data();\n            for (std::size_t i = 0; i + 7 <= snapshot.size(); ++i)")
+        # FindRipRelativeXrefs: parse executable spans from 1 MiB local chunks,
+        # overlapping by six bytes for the seven-byte RIP-relative instruction.
+        set(STRPM_XREF_DIRECT_READ "            const auto* code = reinterpret_cast<const std::uint8_t*>(span.base);\n            for (std::size_t i = 0; i + 7 <= span.size; ++i)\n            {\n                if ((code[i] & 0xF8) != 0x48 || code[i + 1] != 0x8D)\n                    continue;\n\n                const std::uint8_t modrm = code[i + 2];\n                if ((modrm & 0xC7) != 0x05)\n                    continue;\n\n                std::int32_t displacement = 0;\n                std::memcpy(&displacement, code + i + 3, sizeof(displacement));\n                const auto instruction = span.base + i;\n                const auto target = instruction + 7 + static_cast<std::intptr_t>(displacement);\n                if (std::find(g_anchorAddresses.begin(), g_anchorAddresses.end(), target) != g_anchorAddresses.end())\n                    g_xrefs.push_back(instruction);\n            }")
+        set(STRPM_XREF_SNAPSHOT_READ [=[            constexpr std::size_t kChunkBytes = 1u * 1024u * 1024u;
+            constexpr std::size_t kInstructionBytes = 7;
+            constexpr std::size_t kOverlapBytes = kInstructionBytes - 1;
+            for (std::size_t offset = 0; offset < span.size; offset += kChunkBytes)
+            {
+                const auto remaining = span.size - offset;
+                const auto payloadBytes = std::min(kChunkBytes, remaining);
+                const auto readBytes = std::min(remaining, payloadBytes + kOverlapBytes);
+
+                std::vector<std::uint8_t> snapshot;
+                if (!SnapshotProcessMemory(span.base + offset, readBytes, snapshot))
+                    continue;
+
+                const auto* code = snapshot.data();
+                for (std::size_t i = 0;
+                     i < payloadBytes && i + kInstructionBytes <= snapshot.size();
+                     ++i)
+                {
+                    if ((code[i] & 0xF8) != 0x48 || code[i + 1] != 0x8D)
+                        continue;
+
+                    const std::uint8_t modrm = code[i + 2];
+                    if ((modrm & 0xC7) != 0x05)
+                        continue;
+
+                    std::int32_t displacement = 0;
+                    std::memcpy(&displacement, code + i + 3, sizeof(displacement));
+                    const auto instruction = span.base + offset + i;
+                    const auto target = instruction + 7 + static_cast<std::intptr_t>(displacement);
+                    if (std::find(g_anchorAddresses.begin(), g_anchorAddresses.end(), target) != g_anchorAddresses.end())
+                        g_xrefs.push_back(instruction);
+                }
+            }]=])
         string(FIND "${STRPM_BRIDGE_SOURCE_TEXT}" "${STRPM_XREF_DIRECT_READ}" STRPM_XREF_DIRECT_READ_POS)
         if(STRPM_XREF_DIRECT_READ_POS EQUAL -1)
             message(FATAL_ERROR "Unable to locate xref direct-read scan")
         endif()
         string(REPLACE "${STRPM_XREF_DIRECT_READ}" "${STRPM_XREF_SNAPSHOT_READ}" STRPM_BRIDGE_SOURCE_TEXT "${STRPM_BRIDGE_SOURCE_TEXT}")
 
-        # EnumerateDirectCalls: snapshot the resolved function before opcode parsing.
+        # EnumerateDirectCalls: resolved functions are normally small. Snapshot
+        # them once and parse only local bytes.
         set(STRPM_CALL_DIRECT_READ "        const auto* code = reinterpret_cast<const std::uint8_t*>(bounds.begin);\n        const auto size = bounds.end - bounds.begin;")
         set(STRPM_CALL_SNAPSHOT_READ "        const auto size = bounds.end - bounds.begin;\n        std::vector<std::uint8_t> snapshot;\n        if (!SnapshotProcessMemory(bounds.begin, size, snapshot))\n            return result;\n        const auto* code = snapshot.data();")
         string(FIND "${STRPM_BRIDGE_SOURCE_TEXT}" "${STRPM_CALL_DIRECT_READ}" STRPM_CALL_DIRECT_READ_POS)
@@ -187,7 +233,7 @@ if(STRPM_BUILD_STR180_BRIDGE_PROBE)
         endif()
         string(REPLACE "${STRPM_CALL_DIRECT_READ}" "${STRPM_CALL_SNAPSHOT_READ}" STRPM_BRIDGE_SOURCE_TEXT "${STRPM_BRIDGE_SOURCE_TEXT}")
 
-        # FunctionContainsImmediate32: inspect a local function snapshot only.
+        # FunctionContainsImmediate32 already limits functions to 0x4000 bytes.
         set(STRPM_IMMEDIATE_DIRECT_READ "        const auto* bytes = reinterpret_cast<const std::uint8_t*>(bounds.begin);\n        std::uint8_t needle[sizeof(value)]{};")
         set(STRPM_IMMEDIATE_SNAPSHOT_READ "        std::vector<std::uint8_t> snapshot;\n        if (!SnapshotProcessMemory(bounds.begin, size, snapshot))\n            return false;\n        const auto* bytes = snapshot.data();\n        std::uint8_t needle[sizeof(value)]{};")
         string(FIND "${STRPM_BRIDGE_SOURCE_TEXT}" "${STRPM_IMMEDIATE_DIRECT_READ}" STRPM_IMMEDIATE_DIRECT_READ_POS)
@@ -196,43 +242,38 @@ if(STRPM_BUILD_STR180_BRIDGE_PROBE)
         endif()
         string(REPLACE "${STRPM_IMMEDIATE_DIRECT_READ}" "${STRPM_IMMEDIATE_SNAPSHOT_READ}" STRPM_BRIDGE_SOURCE_TEXT "${STRPM_BRIDGE_SOURCE_TEXT}")
 
-        # The only remaining memcmp calls now operate on snapshot/local data. Keep
-        # them behind ReadProcessMemory as an additional fail-closed boundary.
+        # Remaining memcmp calls now operate exclusively on local snapshots.
         string(REPLACE "std::memcmp" "CompareSnapshotBytes" STRPM_BRIDGE_SOURCE_TEXT "${STRPM_BRIDGE_SOURCE_TEXT}")
 
-        # Retain the whole-resolver SEH boundary as a final belt-and-suspenders
-        # fallback for Win32 APIs or future resolver code.
-        set(STRPM_BOOTSTRAP_MARKER "    void BootstrapLoop()")
-        string(FIND "${STRPM_BRIDGE_SOURCE_TEXT}" "${STRPM_BOOTSTRAP_MARKER}" STRPM_BOOTSTRAP_MARKER_POS)
-        if(STRPM_BOOTSTRAP_MARKER_POS EQUAL -1)
-            message(FATAL_ERROR "Unable to locate BootstrapLoop in STRPluginMessagingBridge.cpp")
-        endif()
-
-        set(STRPM_GUARDED_RESOLVER [=[    bool ResolveProcessChatMessageGuarded() noexcept
-    {
-#if defined(_MSC_VER)
-        __try
-        {
-            return ResolveProcessChatMessage();
-        }
-        __except (EXCEPTION_EXECUTE_HANDLER)
-        {
-            return false;
-        }
-#else
-        return ResolveProcessChatMessage();
-#endif
-    }
-
-    void BootstrapLoop()]=])
-        string(REPLACE "${STRPM_BOOTSTRAP_MARKER}" "${STRPM_GUARDED_RESOLVER}" STRPM_BRIDGE_SOURCE_TEXT "${STRPM_BRIDGE_SOURCE_TEXT}")
-
+        # Add explicit resolver-pass diagnostics. The first log is emitted before
+        # any process-memory scan so a silent/stuck pass is immediately visible.
         set(STRPM_RESOLVER_CALL "if (ResolveProcessChatMessage())")
         string(FIND "${STRPM_BRIDGE_SOURCE_TEXT}" "${STRPM_RESOLVER_CALL}" STRPM_RESOLVER_CALL_POS)
         if(STRPM_RESOLVER_CALL_POS EQUAL -1)
             message(FATAL_ERROR "Unable to locate resolver call in STRPluginMessagingBridge.cpp")
         endif()
-        string(REPLACE "${STRPM_RESOLVER_CALL}" "if (ResolveProcessChatMessageGuarded())" STRPM_BRIDGE_SOURCE_TEXT "${STRPM_BRIDGE_SOURCE_TEXT}")
+        string(REPLACE
+            "${STRPM_RESOLVER_CALL}"
+            "Log(\"send resolver pass starting\");\n                const auto resolverStartedAt = GetTickCount64();\n                if (ResolveProcessChatMessage())"
+            STRPM_BRIDGE_SOURCE_TEXT
+            "${STRPM_BRIDGE_SOURCE_TEXT}"
+        )
+
+        set(STRPM_RESOLVER_SUCCESS_MARKER "                    g_sendResolverReady.store(true);")
+        string(REPLACE
+            "${STRPM_RESOLVER_SUCCESS_MARKER}"
+            "                    Log(\"send resolver pass completed in %llu ms\", static_cast<unsigned long long>(GetTickCount64() - resolverStartedAt));\n                    g_sendResolverReady.store(true);"
+            STRPM_BRIDGE_SOURCE_TEXT
+            "${STRPM_BRIDGE_SOURCE_TEXT}"
+        )
+
+        set(STRPM_RESOLVER_FAILURE_MARKER "                    Log(\"send resolver waiting for mapped STR 1.8.0 runtime\");")
+        string(REPLACE
+            "${STRPM_RESOLVER_FAILURE_MARKER}"
+            "                    Log(\"send resolver pass failed in %llu ms; waiting for mapped STR 1.8.0 runtime\", static_cast<unsigned long long>(GetTickCount64() - resolverStartedAt));"
+            STRPM_BRIDGE_SOURCE_TEXT
+            "${STRPM_BRIDGE_SOURCE_TEXT}"
+        )
 
         set(STRPM_GENERATED_BRIDGE "${CMAKE_CURRENT_BINARY_DIR}/STRPluginMessagingBridge.guarded.cpp")
         file(WRITE "${STRPM_GENERATED_BRIDGE}" "${STRPM_BRIDGE_SOURCE_TEXT}")
