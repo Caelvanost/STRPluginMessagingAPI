@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.21)
 
 project(
     STRPluginMessagingAPI
-    VERSION 0.4.0
+    VERSION 0.4.1
     LANGUAGES CXX
 )
 
@@ -36,6 +36,7 @@ set_target_properties(STRPluginMessagingAPIClient
 
 add_library(STRPluginMessagingAPIRuntime SHARED
     src/STRPluginMessagingAPIRuntime.cpp
+    src/STRPluginMessagingAPISKSEMetadata.cpp
 )
 
 target_compile_features(STRPluginMessagingAPIRuntime PUBLIC cxx_std_20)
@@ -43,6 +44,8 @@ target_compile_features(STRPluginMessagingAPIRuntime PUBLIC cxx_std_20)
 target_include_directories(STRPluginMessagingAPIRuntime
     PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}/include
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
 
 if(STRPM_ENABLE_UDP_BACKEND)
@@ -72,6 +75,7 @@ if(STRPM_BUILD_STR180_BRIDGE_PROBE)
     add_library(STRPluginMessagingBridge SHARED
         src/STRPluginMessagingBridge.cpp
         src/STRPluginMessagingBridgeReceive.cpp
+        src/STRPluginMessagingBridgeSKSE.cpp
     )
     target_compile_features(STRPluginMessagingBridge PUBLIC cxx_std_20)
     target_compile_definitions(STRPluginMessagingBridge
