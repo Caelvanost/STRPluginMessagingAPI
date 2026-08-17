@@ -35,6 +35,16 @@ jobs:
             }
           }
 
+      - name: Package Vortex test archive
+        shell: pwsh
+        run: |
+          $stage = "artifact-vortex/Data/SKSE/Plugins"
+          New-Item -ItemType Directory -Force -Path $stage | Out-Null
+          Copy-Item "build/Release/STRPluginMessagingAPI.dll" "$stage/STRPluginMessagingAPI.dll"
+          Copy-Item "build/Release/STRPluginMessagingBridge.dll" "$stage/STRPluginMessagingBridge.dll"
+          Copy-Item "package/Data/SKSE/Plugins/STRPluginMessagingAPI.ini" "$stage/STRPluginMessagingAPI.ini"
+          Compress-Archive -Path "artifact-vortex/*" -DestinationPath "STRPluginMessagingAPI-v0.4.1-test-Vortex.zip" -Force
+
       - name: Upload DLLs
         uses: actions/upload-artifact@v4
         with:
@@ -42,3 +52,9 @@ jobs:
           path: |
             build/Release/STRPluginMessagingAPI.dll
             build/Release/STRPluginMessagingBridge.dll
+
+      - name: Upload Vortex package
+        uses: actions/upload-artifact@v4
+        with:
+          name: STRPluginMessagingAPI-v0.4.1-test-Vortex
+          path: STRPluginMessagingAPI-v0.4.1-test-Vortex.zip
