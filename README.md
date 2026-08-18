@@ -2,7 +2,7 @@
 
 Shared messaging broker for Skyrim Together Reborn compatibility mods.
 
-Current development version: **v0.6.3**.
+Current development version: **v0.6.4**.
 
 STRPluginMessagingAPI gives SKSE mods one common messaging layer over the
 **official Skyrim Together Reborn 1.8.0 connection**. It is intended for mods
@@ -53,6 +53,19 @@ Validated:
 - reliable/ordered flags;
 - public API channel registration and callback delivery;
 - automatic bidirectional E2E handshake in the diagnostic client.
+
+### v0.6.4
+
+v0.6.4 is a build-only correction to the v0.6.3 UI suppression implementation.
+The `OverlayApp::ExecuteAsync` strategy, validated send/receive transport and
+server relay are unchanged.
+
+The v0.6.3 header declared the breakpoint alias inside
+`STRPMChatUiSuppressV3::detail` but referenced it as unqualified `Base` from the
+outer namespace in `Arm()`. MSVC therefore failed with `C2065: 'Base':
+identificateur non déclaré`. v0.6.4 changes that initialization to
+`detail::Base{...}` and synchronizes the project, SKSE metadata, diagnostic DLL,
+packaging and CI version strings.
 
 ### v0.6.3
 
@@ -139,7 +152,7 @@ v0.6.0 introduced **STRPM chat UI suppression**.
 A separate bridge helper dynamically resolved candidate client functions
 referencing the exact CEF `"message\0"` event literal. Later revisions replace
 that initial callback-entry strategy with safer runtime probing and finally the
-common `OverlayApp::ExecuteAsync` interception used by v0.6.3.
+common `OverlayApp::ExecuteAsync` interception used by v0.6.3/v0.6.4.
 
 ## Public API
 
@@ -216,7 +229,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\build-vortex.ps1
 Output:
 
 ```text
-dist/STRPluginMessagingAPI-v0.6.3-Vortex.zip
+dist/STRPluginMessagingAPI-v0.6.4-Vortex.zip
 ```
 
 For E2E/UI-suppression regression testing, temporarily include the diagnostic
@@ -229,10 +242,10 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\build-vortex.ps1 -IncludeD
 Test output:
 
 ```text
-dist/STRPluginMessagingAPI-v0.6.3-test-Vortex.zip
+dist/STRPluginMessagingAPI-v0.6.4-test-Vortex.zip
 ```
 
-## v0.6.3 Vortex Layout
+## v0.6.4 Vortex Layout
 
 Normal package:
 
@@ -249,7 +262,7 @@ Data/SKSE/Plugins/STRPluginMessagingDiagnostic.dll
 ```
 
 The diagnostic client remains in the source/build graph as a regression target
-but is not included in the normal v0.6.3 package.
+but is not included in the normal v0.6.4 package.
 
 ## Expected Runtime Logs
 
@@ -270,7 +283,7 @@ TransportService instance captured: ...
 STRPM bridge ready: native STR send captured and receive hook armed
 ```
 
-For v0.6.3 UI suppression, the bridge should additionally report:
+For v0.6.4 UI suppression, the bridge should additionally report:
 
 ```text
 STRPM chat UI suppression bootstrap started
@@ -289,7 +302,7 @@ remain visible normally.
 
 ## Remaining Work
 
-- validate v0.6.3 UI suppression on both clients;
+- validate v0.6.4 UI suppression on both clients;
 - discover/report the local STR connection ID directly;
 - finalize `Host` target semantics;
 - reduce pre-ready `send()` noise/retries;
