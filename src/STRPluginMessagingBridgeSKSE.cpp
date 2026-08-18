@@ -17,7 +17,7 @@ struct SKSEInterface;
 extern "C" __declspec(dllexport) STRPMSKSE::PluginVersionData SKSEPlugin_Version =
 {
     STRPMSKSE::PluginVersionData::kVersion,
-    STRPMSKSE::kPluginVersion_0_6_3,
+    STRPMSKSE::kPluginVersion_0_6_4,
     "STRPluginMessagingBridge",
     "Caelvanost",
     "",
@@ -32,14 +32,13 @@ extern "C" __declspec(dllexport) bool SKSEPlugin_Load(const SKSEInterface*)
     FILE* file = nullptr;
     fopen_s(&file, "Data\\SKSE\\Plugins\\STRPluginMessagingBridge.log", "a");
     if (file != nullptr) {
-        std::fprintf(file, "STRPluginMessagingBridge v0.6.3: SKSEPlugin_Load entered\n");
+        std::fprintf(file, "STRPluginMessagingBridge v0.6.4: SKSEPlugin_Load entered\n");
         std::fclose(file);
     }
 
-    // UI suppression is independent from the transport hooks. v0.6.3 resolves
-    // the common TiltedUI OverlayApp::ExecuteAsync endpoint used by STR 1.8.0.
-    // Once the validated receive hook is armed, a read-only observer marks raw
-    // STRPM envelopes and suppresses only the corresponding CEF "message" call.
+    // UI suppression is independent from the transport hooks. v0.6.4 keeps the
+    // v0.6.3 OverlayApp::ExecuteAsync strategy and fixes the build-only type
+    // qualification error in the breakpoint state initialization.
     STRPMChatUiSuppressBootstrap::Start();
 
     // The transport hooks are initialized later by STRPluginMessagingAPI via
