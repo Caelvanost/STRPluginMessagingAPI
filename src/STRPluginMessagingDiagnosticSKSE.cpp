@@ -6,6 +6,7 @@
 #endif
 #include <Windows.h>
 
+#include <atomic>
 #include <chrono>
 #include <cstdarg>
 #include <cstdio>
@@ -21,9 +22,10 @@ namespace
 {
     constexpr char kDiagnosticChannel[] = "strpm.test";
     constexpr auto kApiRetryDelay = std::chrono::milliseconds(500);
-    constexpr auto kSendRetryDelay = std::chrono::seconds(1);
-    constexpr auto kSendRetryLogInterval = std::chrono::seconds(5);
+    constexpr auto kSendRetryDelay = std::chrono::seconds(2);
+    constexpr auto kSendRetryLogInterval = std::chrono::seconds(10);
     constexpr auto kProbeSpacing = std::chrono::seconds(5);
+    constexpr auto kHandshakePollDelay = std::chrono::milliseconds(250);
     constexpr std::uint32_t kProbeFlags =
         STRPM::kMessageReliable |
         STRPM::kMessageOrdered |
@@ -32,6 +34,9 @@ namespace
     std::mutex g_logMutex;
     std::jthread g_worker;
     STRPM::ListenerHandle g_listener{};
+    std::string g_computerName;
+    std::atomic_bool g_peerObserved{ false };
+    std::atomic_bool g_peerAckObserved{ false };
 
     void Log(const char* fmt, ...)
     {
@@ -70,6 +75,15 @@ namespace
         return result;
     }
 
+    bool IsPeerDiagnosticPayload(std::string_view payload)
+    {
+        if (!payload.starts_with("STRPM_E2E_V1|"))
+            return false;
+
+        const std::string localPcField = "|pc=" + g_computerName + "|";
+        return payload.find(localPcField) == std::string_view::npos;
+    }
+
     void STRPM_CALL ReceiveDiagnostic(
         const STRPM::Message* message,
         void*)
@@ -93,6 +107,29 @@ namespace
             message->flags,
             message->size,
             payload.c_str());
+
+        if (!IsPeerDiagnosticPayload(payloadView))
+            return;
+
+        if (!g_peerObserved.exchange(true))
+        {
+            Log(
+                "E2E PEER OBSERVED senderId=%llu senderName='%s' payload='%s'",
+                static_cast<unsigned long long>(message->sender.connectionID),
+                senderName,
+                payload.c_str());
+        }
+
+        if (payloadView.starts_with("STRPM_E2E_V1|ack=1|"))
+        {
+            if (!g_peerAckObserved.exchange(true))
+            {
+                Log(
+                    "E2E PEER ACK OBSERVED senderId=%llu senderName='%s'",
+                    static_cast<unsigned long long>(message->sender.connectionID),
+                    senderName);
+            }
+        }
     }
 
     bool SleepInterruptible(
@@ -109,6 +146,19 @@ namespace
             slept += current;
         }
         return !token.stop_requested();
+    }
+
+    STRPM::Result SendDiagnosticPayload(
+        const STRPM::Interface* api,
+        const STRPM::Target& target,
+        std::string_view payload)
+    {
+        return api->send(
+            kDiagnosticChannel,
+            target,
+            payload.data(),
+            payload.size(),
+            kProbeFlags);
     }
 
     void DiagnosticWorker(std::stop_token token)
@@ -152,7 +202,7 @@ namespace
         }
         Log("registered public callback on channel '%s'", kDiagnosticChannel);
 
-        const auto computerName = GetDiagnosticComputerName();
+        g_computerName = GetDiagnosticComputerName();
         STRPM::Target target{};
         target.kind = STRPM::TargetKind::kAllPlayers;
 
@@ -162,16 +212,10 @@ namespace
         {
             const auto payload =
                 std::string("STRPM_E2E_V1|probe=") + std::to_string(probeNumber) +
-                "|pc=" + computerName +
+                "|pc=" + g_computerName +
                 "|pid=" + std::to_string(GetCurrentProcessId());
 
-            const auto result = api->send(
-                kDiagnosticChannel,
-                target,
-                payload.data(),
-                payload.size(),
-                kProbeFlags);
-
+            const auto result = SendDiagnosticPayload(api, target, payload);
             if (result == STRPM::Result::kOk)
             {
                 Log(
@@ -191,7 +235,7 @@ namespace
                 now - lastWaitingLog >= kSendRetryLogInterval)
             {
                 Log(
-                    "E2E send waiting: %s (connect both clients with F2, then send one normal STR chat message on this client)",
+                    "E2E send waiting: %s (connect with F2, then send one normal STR chat message on this client)",
                     STRPM::ResultToString(result));
                 lastWaitingLog = now;
             }
@@ -200,14 +244,55 @@ namespace
                 return;
         }
 
-        Log("E2E diagnostic send sequence complete; callback remains registered for peer probes");
+        Log("E2E initial probes complete; waiting for a peer probe before sending ACK");
+
+        bool ackSent = false;
+        auto lastAckWaitingLog = std::chrono::steady_clock::time_point{};
+        while (!token.stop_requested())
+        {
+            if (g_peerObserved.load() && !ackSent)
+            {
+                const auto payload =
+                    std::string("STRPM_E2E_V1|ack=1|pc=") + g_computerName +
+                    "|pid=" + std::to_string(GetCurrentProcessId());
+                const auto result = SendDiagnosticPayload(api, target, payload);
+                if (result == STRPM::Result::kOk)
+                {
+                    Log(
+                        "E2E ACK SEND OK target=all flags=0x%X bytes=%zu payload='%s'",
+                        kProbeFlags,
+                        payload.size(),
+                        payload.c_str());
+                    ackSent = true;
+                }
+                else
+                {
+                    const auto now = std::chrono::steady_clock::now();
+                    if (lastAckWaitingLog.time_since_epoch().count() == 0 ||
+                        now - lastAckWaitingLog >= kSendRetryLogInterval)
+                    {
+                        Log("E2E ACK waiting: %s", STRPM::ResultToString(result));
+                        lastAckWaitingLog = now;
+                    }
+                }
+            }
+
+            if (ackSent && g_peerAckObserved.load())
+            {
+                Log("E2E BIDIRECTIONAL HANDSHAKE COMPLETE");
+                return;
+            }
+
+            if (!SleepInterruptible(token, kHandshakePollDelay))
+                return;
+        }
     }
 }
 
 extern "C" __declspec(dllexport) STRPMSKSE::PluginVersionData SKSEPlugin_Version =
 {
     STRPMSKSE::PluginVersionData::kVersion,
-    STRPMSKSE::kPluginVersion_0_5_0,
+    STRPMSKSE::kPluginVersion_0_5_1,
     "STRPluginMessagingDiagnostic",
     "Caelvanost",
     "",
@@ -224,7 +309,7 @@ extern "C" __declspec(dllexport) bool SKSEPlugin_Load(const SKSEInterface*)
         fopen_s(&file, "Data\\SKSE\\Plugins\\STRPluginMessagingDiagnostic.log", "w");
         if (file)
         {
-            std::fprintf(file, "STRPluginMessagingDiagnostic v0.5.0: SKSEPlugin_Load entered\n");
+            std::fprintf(file, "STRPluginMessagingDiagnostic v0.5.1: SKSEPlugin_Load entered\n");
             std::fclose(file);
         }
     }
