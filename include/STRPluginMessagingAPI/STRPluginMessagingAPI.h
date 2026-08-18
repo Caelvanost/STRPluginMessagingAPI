@@ -16,6 +16,7 @@ namespace STRPM
     inline constexpr std::uint32_t kInterfaceVersion = 2;
     inline constexpr std::uint32_t kDiagnosticsVersion = 2;
     inline constexpr std::uint32_t kTransportInterfaceVersion = 1;
+    inline constexpr std::uint32_t kProxyResolverVersion = 1;
     inline constexpr std::uint32_t kMaxChannelLength = 96;
     inline constexpr std::uint32_t kMaxPayloadBytes = 24 * 1024;
     inline constexpr char kQueryInterfaceExportName[] =
@@ -24,8 +25,12 @@ namespace STRPM
         "STR_QueryPluginMessagingDiagnostics";
     inline constexpr char kQueryTransportExportName[] =
         "STRPM_QueryTransportInterface";
+    inline constexpr char kQueryProxyResolverExportName[] =
+        "STR_QueryPluginMessagingProxyResolver";
 
     using ConnectionID = std::uint64_t;
+    using ProxyFormID = std::uint32_t;
+    inline constexpr ProxyFormID kInvalidProxyFormID = 0;
 
     enum class Result : std::uint32_t
     {
@@ -72,6 +77,14 @@ namespace STRPM
         kStrBridge = 2
     };
 
+    enum class ProxyMappingEventType : std::uint32_t
+    {
+        kAdded = 1,
+        kUpdated = 2,
+        kRemoved = 3,
+        kCleared = 4
+    };
+
     struct Target
     {
         TargetKind kind{ TargetKind::kAllPlayers };
@@ -101,12 +114,24 @@ namespace STRPM
         std::uint64_t value{ 0 };
     };
 
+    struct ProxyMappingEvent
+    {
+        ProxyMappingEventType type{ ProxyMappingEventType::kAdded };
+        ConnectionID connectionID{ 0 };
+        ProxyFormID oldFormID{ kInvalidProxyFormID };
+        ProxyFormID newFormID{ kInvalidProxyFormID };
+    };
+
     using ReceiveCallback = void(STRPM_CALL*)(
         const Message* message,
         void* userData);
 
     using LogCallback = void(STRPM_CALL*)(
         const char* message,
+        void* userData);
+
+    using ProxyMappingCallback = void(STRPM_CALL*)(
+        const ProxyMappingEvent* event,
         void* userData);
 
     struct Interface
@@ -188,6 +213,23 @@ namespace STRPM
             const char* displayName);
     };
 
+    struct ProxyResolverInterface
+    {
+        std::uint32_t version{ kProxyResolverVersion };
+
+        Result(STRPM_CALL* resolve)(
+            ConnectionID connectionID,
+            ProxyFormID* outFormID);
+
+        Result(STRPM_CALL* registerListener)(
+            ProxyMappingCallback callback,
+            void* userData);
+
+        Result(STRPM_CALL* unregisterListener)(
+            ProxyMappingCallback callback,
+            void* userData);
+    };
+
     using QueryInterfaceFn = Result(STRPM_CALL*)(
         std::uint32_t requestedVersion,
         const Interface** outInterface);
@@ -200,6 +242,10 @@ namespace STRPM
         std::uint32_t requestedVersion,
         const TransportInterface** outInterface);
 
+    using QueryProxyResolverFn = Result(STRPM_CALL*)(
+        std::uint32_t requestedVersion,
+        const ProxyResolverInterface** outInterface);
+
     [[nodiscard]] const Interface* LoadFromModule(
         const wchar_t* moduleName = L"STRPluginMessagingAPI.dll") noexcept;
 
@@ -208,6 +254,9 @@ namespace STRPM
 
     [[nodiscard]] const TransportInterface* LoadTransportFromModule(
         const wchar_t* moduleName) noexcept;
+
+    [[nodiscard]] const ProxyResolverInterface* LoadProxyResolverFromModule(
+        const wchar_t* moduleName = L"STRPluginMessagingAPI.dll") noexcept;
 
     [[nodiscard]] const char* ResultToString(Result result) noexcept;
 }
