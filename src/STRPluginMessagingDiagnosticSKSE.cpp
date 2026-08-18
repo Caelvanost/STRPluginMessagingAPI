@@ -292,7 +292,7 @@ namespace
 extern "C" __declspec(dllexport) STRPMSKSE::PluginVersionData SKSEPlugin_Version =
 {
     STRPMSKSE::PluginVersionData::kVersion,
-    STRPMSKSE::kPluginVersion_0_6_4,
+    STRPMSKSE::kPluginVersion_0_7_0,
     "STRPluginMessagingDiagnostic",
     "Caelvanost",
     "",
@@ -309,7 +309,7 @@ extern "C" __declspec(dllexport) bool SKSEPlugin_Load(const SKSEInterface*)
         fopen_s(&file, "Data\\SKSE\\Plugins\\STRPluginMessagingDiagnostic.log", "w");
         if (file)
         {
-            std::fprintf(file, "STRPluginMessagingDiagnostic v0.6.4: SKSEPlugin_Load entered\n");
+            std::fprintf(file, "STRPluginMessagingDiagnostic v0.7.0: SKSEPlugin_Load entered\n");
             std::fclose(file);
         }
     }
