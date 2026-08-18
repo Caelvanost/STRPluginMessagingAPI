@@ -1,6 +1,6 @@
 param(
     [string]$Configuration = "Release",
-    [string]$Version = "0.4.9"
+    [string]$Version = "0.5.0"
 )
 
 $ErrorActionPreference = "Stop"
@@ -39,7 +39,8 @@ if ($LASTEXITCODE -ne 0) {
 
 $Dll = Join-Path $Build "STRPluginMessagingAPI.dll"
 $BridgeDll = Join-Path $Build "STRPluginMessagingBridge.dll"
-foreach ($RequiredDll in @($Dll, $BridgeDll)) {
+$DiagnosticDll = Join-Path $Build "STRPluginMessagingDiagnostic.dll"
+foreach ($RequiredDll in @($Dll, $BridgeDll, $DiagnosticDll)) {
     if (-not (Test-Path -LiteralPath $RequiredDll -PathType Leaf)) {
         throw "DLL introuvable apres compilation: $RequiredDll"
     }
@@ -58,6 +59,7 @@ $PluginDir = Join-Path $Stage "Data\SKSE\Plugins"
 New-Item -ItemType Directory -Force -Path $PluginDir | Out-Null
 Copy-Item -LiteralPath $Dll -Destination (Join-Path $PluginDir "STRPluginMessagingAPI.dll") -Force
 Copy-Item -LiteralPath $BridgeDll -Destination (Join-Path $PluginDir "STRPluginMessagingBridge.dll") -Force
+Copy-Item -LiteralPath $DiagnosticDll -Destination (Join-Path $PluginDir "STRPluginMessagingDiagnostic.dll") -Force
 
 Compress-Archive `
     -Path (Join-Path $Stage "*") `
@@ -72,7 +74,8 @@ try {
     foreach ($RequiredEntry in @(
         "Data/SKSE/Plugins/STRPluginMessagingAPI.dll",
         "Data/SKSE/Plugins/STRPluginMessagingAPI.ini",
-        "Data/SKSE/Plugins/STRPluginMessagingBridge.dll"
+        "Data/SKSE/Plugins/STRPluginMessagingBridge.dll",
+        "Data/SKSE/Plugins/STRPluginMessagingDiagnostic.dll"
     )) {
         if ($Entries -notcontains $RequiredEntry) {
             throw "Entree absente de l'archive: $RequiredEntry"
