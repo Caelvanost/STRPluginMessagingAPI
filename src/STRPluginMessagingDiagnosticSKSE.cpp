@@ -186,6 +186,7 @@ namespace
             return;
 
         Log("public API v%u loaded", api->version);
+        g_computerName = GetDiagnosticComputerName();
 
         const auto registerResult = api->registerChannel(
             kDiagnosticChannel,
@@ -200,9 +201,8 @@ namespace
                 STRPM::ResultToString(registerResult));
             return;
         }
-        Log("registered public callback on channel '%s'", kDiagnosticChannel);
+        Log("registered public callback on channel '%s' for pc='%s'", kDiagnosticChannel, g_computerName.c_str());
 
-        g_computerName = GetDiagnosticComputerName();
         STRPM::Target target{};
         target.kind = STRPM::TargetKind::kAllPlayers;
 
