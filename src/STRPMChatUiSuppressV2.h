@@ -214,7 +214,7 @@ namespace STRPMChatUiSuppressV2
                 read != sizeof(original))
                 continue;
 
-            Base candidate{ address, original, false };
+            detail::Base candidate{ address, original, false };
             if (STRPMChatUiSuppress::detail::PatchByte(address, 0xCC))
                 candidate.armed = true;
             detail::g_candidates.push_back(candidate);
@@ -223,7 +223,7 @@ namespace STRPMChatUiSuppressV2
         return std::any_of(
             detail::g_candidates.begin(),
             detail::g_candidates.end(),
-            [](const Base& candidate) { return candidate.armed; });
+            [](const detail::Base& candidate) { return candidate.armed; });
     }
 
     inline std::size_t CandidateCount() noexcept
