@@ -1,14 +1,5 @@
 #include "SKSEPluginVersionCompat.h"
 
-// Windows/RPC headers define the legacy macro `small` as `char`. The UI
-// suppression shadow structs intentionally use normal C++ identifiers, so make
-// sure that macro cannot rewrite their field declarations.
-#ifdef small
-#undef small
-#endif
-
-#include "STRPMChatUiSuppressBootstrap.h"
-
 #include <cstdint>
 #include <cstdio>
 
@@ -17,7 +8,7 @@ struct SKSEInterface;
 extern "C" __declspec(dllexport) STRPMSKSE::PluginVersionData SKSEPlugin_Version =
 {
     STRPMSKSE::PluginVersionData::kVersion,
-    STRPMSKSE::kPluginVersion_0_6_4,
+    STRPMSKSE::kPluginVersion_0_7_0,
     "STRPluginMessagingBridge",
     "Caelvanost",
     "",
@@ -31,17 +22,16 @@ extern "C" __declspec(dllexport) bool SKSEPlugin_Load(const SKSEInterface*)
 {
     FILE* file = nullptr;
     fopen_s(&file, "Data\\SKSE\\Plugins\\STRPluginMessagingBridge.log", "a");
-    if (file != nullptr) {
-        std::fprintf(file, "STRPluginMessagingBridge v0.6.4: SKSEPlugin_Load entered\n");
+    if (file != nullptr)
+    {
+        std::fprintf(file, "STRPluginMessagingBridge v0.7.0: SKSEPlugin_Load entered\n");
         std::fclose(file);
     }
 
-    // UI suppression is independent from the transport hooks. v0.6.4 keeps the
-    // v0.6.3 OverlayApp::ExecuteAsync strategy and fixes the build-only type
-    // qualification error in the breakpoint state initialization.
-    STRPMChatUiSuppressBootstrap::Start();
-
-    // The transport hooks are initialized later by STRPluginMessagingAPI via
+    // v0.7.0 suppresses reserved STRPM chat packets in the validated receive
+    // path at TransportService::OnConsume, before STR creates and dispatches a
+    // NotifyChatMessageBroadcast. No separate overlay/UI hook is required.
+    // Transport hooks are initialized later by STRPluginMessagingAPI through
     // STRPM_QueryTransportInterface.
     return true;
 }
