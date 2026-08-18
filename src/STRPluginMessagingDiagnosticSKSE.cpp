@@ -6,7 +6,6 @@
 #endif
 #include <Windows.h>
 
-#include <atomic>
 #include <chrono>
 #include <cstdarg>
 #include <cstdio>
@@ -32,7 +31,6 @@ namespace
 
     std::mutex g_logMutex;
     std::jthread g_worker;
-    std::atomic_bool g_listenerRegistered{ false };
     STRPM::ListenerHandle g_listener{};
 
     void Log(const char* fmt, ...)
@@ -115,7 +113,14 @@ namespace
 
     void DiagnosticWorker(std::stop_token token)
     {
-        Log("diagnostic worker started; waiting for STRPluginMessagingAPI public interface");
+        Log("diagnostic worker started; waiting for SKSE to load STRPluginMessagingAPI.dll");
+
+        while (!token.stop_requested() &&
+               GetModuleHandleW(L"STRPluginMessagingAPI.dll") == nullptr)
+        {
+            if (!SleepInterruptible(token, kApiRetryDelay))
+                return;
+        }
 
         const STRPM::Interface* api = nullptr;
         while (!token.stop_requested())
@@ -145,7 +150,6 @@ namespace
                 STRPM::ResultToString(registerResult));
             return;
         }
-        g_listenerRegistered.store(true);
         Log("registered public callback on channel '%s'", kDiagnosticChannel);
 
         const auto computerName = GetDiagnosticComputerName();
