@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.21)
 
 project(
     STRPluginMessagingAPI
-    VERSION 0.4.9
+    VERSION 0.5.0
     LANGUAGES CXX
 )
 
@@ -376,6 +376,28 @@ if(STRPM_BUILD_STR180_BRIDGE_PROBE)
     )
 endif()
 
+# v0.5.0 validation client. This is intentionally a separate SKSE plugin so it
+# exercises the same public API surface that consumer mods will use.
+add_library(STRPluginMessagingDiagnostic SHARED
+    src/STRPluginMessagingDiagnosticSKSE.cpp
+)
+target_compile_features(STRPluginMessagingDiagnostic PUBLIC cxx_std_20)
+target_include_directories(STRPluginMessagingDiagnostic
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+target_link_libraries(STRPluginMessagingDiagnostic
+    PRIVATE
+        STRPluginMessagingAPIClient
+        Shell32
+        Ole32
+)
+set_target_properties(STRPluginMessagingDiagnostic
+    PROPERTIES
+        OUTPUT_NAME STRPluginMessagingDiagnostic
+)
+
 if(MSVC)
     target_compile_options(STRPluginMessagingAPIClient PRIVATE /W4 /permissive- /EHsc)
     target_compile_options(STRPluginMessagingAPIRuntime
@@ -384,6 +406,13 @@ if(MSVC)
             /permissive-
             /EHsc
             /FI${CMAKE_CURRENT_SOURCE_DIR}/src/STRPMRuntimeLoadRedirect.h
+    )
+    target_compile_options(STRPluginMessagingDiagnostic
+        PRIVATE
+            /W4
+            /permissive-
+            /EHsc
+            /FI${CMAKE_CURRENT_SOURCE_DIR}/src/STRPMDiagnosticLogRedirect.h
     )
     if(STRPM_BUILD_STR180_BRIDGE_PROBE)
         target_compile_options(STRPluginMessagingBridge
@@ -397,6 +426,7 @@ if(MSVC)
 else()
     target_compile_options(STRPluginMessagingAPIClient PRIVATE -Wall -Wextra -Wpedantic)
     target_compile_options(STRPluginMessagingAPIRuntime PRIVATE -Wall -Wextra -Wpedantic)
+    target_compile_options(STRPluginMessagingDiagnostic PRIVATE -Wall -Wextra -Wpedantic)
     if(STRPM_BUILD_STR180_BRIDGE_PROBE)
         target_compile_options(STRPluginMessagingBridge PRIVATE -Wall -Wextra -Wpedantic)
     endif()
