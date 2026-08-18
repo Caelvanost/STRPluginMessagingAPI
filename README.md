@@ -2,7 +2,7 @@
 
 Shared messaging broker for Skyrim Together Reborn compatibility mods.
 
-Current development version: **v0.6.1**.
+Current development version: **v0.6.2**.
 
 STRPluginMessagingAPI gives SKSE mods one common messaging layer over the
 **official Skyrim Together Reborn 1.8.0 connection**. It is intended for mods
@@ -54,6 +54,34 @@ Validated:
 - public API channel registration and callback delivery;
 - automatic bidirectional E2E handshake in the diagnostic client.
 
+### v0.6.2
+
+v0.6.2 changes only the **STRPM chat UI suppression probe**. The validated send,
+receive and server-relay transport paths are intentionally left unchanged.
+
+The v0.6.1 two-client test showed that the bridge resolved three overlay
+candidates and completed the full bidirectional E2E handshake, but none of the
+candidate breakpoints identified itself as `OverlayService::OnChatMessageReceived`.
+The previous detector assumed an exact in-memory layout for
+`TiltedPhoques::String` and a fixed `ChatMessage` member offset.
+
+v0.6.2 removes those assumptions. At each candidate breakpoint it now:
+
+- treats `RDX` as the `NotifyChatMessageBroadcast&` argument, matching the
+  official STR 1.8.0 `OverlayService::OnChatMessageReceived` signature;
+- snapshots only the first `0x100` bytes of the message object with
+  `ReadProcessMemory`;
+- searches the local snapshot for inline/SSO `STRPM|v2|` bytes;
+- inspects aligned pointer-sized fields and safely follows them for a heap-backed
+  string beginning with the exact reserved prefix;
+- fails closed if any read is invalid;
+- logs the first few hits of every candidate with its address, `RDX` value and
+  whether the envelope prefix was detected.
+
+This makes callback identification independent of the private allocator/string
+layout while retaining the exact `STRPM|v2|` filter condition. Ordinary STR chat
+continues through the original code path.
+
 ### v0.6.1
 
 v0.6.1 hardens the STR receive resolver against runtime remapping during Skyrim
@@ -80,29 +108,18 @@ The transport wire format and public API are unchanged.
 
 ### v0.6.0
 
-v0.6.0 adds **STRPM chat UI suppression**.
+v0.6.0 introduced **STRPM chat UI suppression**.
 
-The validated transport and receive path are left unchanged. A separate bridge
-helper dynamically resolves candidate client functions referencing the exact CEF
-`"message\0"` event literal and identifies `OverlayService::OnChatMessageReceived`
-at runtime. When the callback receives a `NotifyChatMessageBroadcast` whose
-`ChatMessage` begins with `STRPM|v2|`, the helper returns before STR calls
-`ExecuteAsync("message", ...)`.
+A separate bridge helper dynamically resolves candidate client functions
+referencing the exact CEF `"message\0"` event literal. The initial implementation
+attempted to identify `OverlayService::OnChatMessageReceived` using a hard-coded
+MSVC/TiltedPhoques string layout. v0.6.2 supersedes that layout-specific detector
+with bounded runtime probing.
 
-Normal STR chat still follows the original STR code path untouched.
-
-The filter relies on the official STR/TiltedCore MSVC x64 ABI:
-
-- `AllocatorCompatible` stores one allocator pointer;
-- `TiltedPhoques::StlAllocator<T>` stores one allocator pointer;
-- `TiltedPhoques::String` is `std::basic_string<char, ..., StlAllocator<char>>`;
-- the resulting `NotifyChatMessageBroadcast::ChatMessage` field is read at
-  offset `0x48` for the official STR 1.8.0 build.
-
-The helper first excludes the bridge DLL's own copy of the STR runtime anchor,
-then resolves only the external mapped STR allocation. Candidate functions are
-not silently truncated: an unexpectedly broad candidate set fails closed and
-leaves normal chat behavior unchanged.
+The helper excludes the bridge DLL's own copy of the STR runtime anchor and
+resolves only the external mapped STR allocation. Candidate functions are not
+silently truncated: an unexpectedly broad candidate set fails closed and leaves
+normal chat behavior unchanged.
 
 ## Public API
 
@@ -179,7 +196,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\build-vortex.ps1
 Output:
 
 ```text
-dist/STRPluginMessagingAPI-v0.6.1-Vortex.zip
+dist/STRPluginMessagingAPI-v0.6.2-Vortex.zip
 ```
 
 For E2E/UI-suppression regression testing, temporarily include the diagnostic
@@ -192,10 +209,10 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\build-vortex.ps1 -IncludeD
 Test output:
 
 ```text
-dist/STRPluginMessagingAPI-v0.6.1-test-Vortex.zip
+dist/STRPluginMessagingAPI-v0.6.2-test-Vortex.zip
 ```
 
-## v0.6.1 Vortex Layout
+## v0.6.2 Vortex Layout
 
 Normal package:
 
@@ -212,7 +229,7 @@ Data/SKSE/Plugins/STRPluginMessagingDiagnostic.dll
 ```
 
 The diagnostic client remains in the source/build graph as a regression target
-but is not included in the normal v0.6.1 package.
+but is not included in the normal v0.6.2 package.
 
 ## Expected Runtime Logs
 
@@ -225,23 +242,27 @@ NotifyChatMessageBroadcast::DeserializeRaw = ...
 receive breakpoint armed for NotifyChatMessageBroadcast::DeserializeRaw
 ```
 
-After one ordinary STR chat message captures the live transport:
+F2 connection traffic can itself exercise `TransportService::Send`; a manual
+`test` chat message is therefore not required if the log already reports:
 
 ```text
 TransportService instance captured: ...
 STRPM bridge ready: native STR send captured and receive hook armed
 ```
 
-For UI suppression, the bridge should additionally report:
+For v0.6.2 UI suppression, the bridge should additionally report candidate hits:
 
 ```text
 STRPM chat UI suppression bootstrap started
-STRPM chat UI suppression candidates armed: ...
-STRPM chat UI filter identified OverlayService::OnChatMessageReceived = ...
+STRPM chat UI suppression candidates armed: 3
+STRPM chat UI candidate hit index=... address=... RDX=... envelope=...
 ```
 
-The final identification line is expected only after the first received STRPM
-envelope reaches the STR overlay callback.
+On successful identification, one hit should report `envelope=yes`, followed by:
+
+```text
+STRPM chat UI filter identified OverlayService::OnChatMessageReceived = ...
+```
 
 With the `-IncludeDiagnostic` test package, the diagnostic logs should still
 reach `E2E BIDIRECTIONAL HANDSHAKE COMPLETE`, while the yellow technical
@@ -250,7 +271,7 @@ remain visible normally.
 
 ## Remaining Work
 
-- validate v0.6.1 startup and UI suppression on both clients;
+- validate v0.6.2 UI suppression on both clients;
 - discover/report the local STR connection ID directly;
 - finalize `Host` target semantics;
 - reduce pre-ready `send()` noise/retries;
