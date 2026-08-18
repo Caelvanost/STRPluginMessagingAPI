@@ -1,4 +1,12 @@
 #include "SKSEPluginVersionCompat.h"
+
+// Windows/RPC headers define the legacy macro `small` as `char`. The UI
+// suppression shadow structs intentionally use normal C++ identifiers, so make
+// sure that macro cannot rewrite their field declarations.
+#ifdef small
+#undef small
+#endif
+
 #include "STRPMChatUiSuppressBootstrap.h"
 
 #include <cstdint>
