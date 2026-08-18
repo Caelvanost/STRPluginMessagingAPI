@@ -1,15 +1,17 @@
 param(
     [string]$Configuration = "Release",
-    [string]$Version = "0.6.0"
+    [string]$Version = "0.6.0",
+    [switch]$IncludeDiagnostic
 )
 
 $ErrorActionPreference = "Stop"
 
 $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $Build = [System.IO.Path]::GetFullPath((Join-Path $Root "..\.build\STRPluginMessagingAPI"))
-$Stage = [System.IO.Path]::GetFullPath((Join-Path $Root "..\.package\STRPluginMessagingAPI-v$Version-Vortex"))
+$PackageSuffix = if ($IncludeDiagnostic) { "-test" } else { "" }
+$Stage = [System.IO.Path]::GetFullPath((Join-Path $Root "..\.package\STRPluginMessagingAPI-v$Version$PackageSuffix-Vortex"))
 $Dist = [System.IO.Path]::GetFullPath((Join-Path $Root "dist"))
-$Zip = [System.IO.Path]::GetFullPath((Join-Path $Dist "STRPluginMessagingAPI-v$Version-Vortex.zip"))
+$Zip = [System.IO.Path]::GetFullPath((Join-Path $Dist "STRPluginMessagingAPI-v$Version$PackageSuffix-Vortex.zip"))
 $Package = Join-Path $Root "package"
 $Ninja = "C:\Program Files\Microsoft Visual Studio\18\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\Ninja\ninja.exe"
 $VsDevCmd = "C:\Program Files\Microsoft Visual Studio\18\Community\Common7\Tools\VsDevCmd.bat"
@@ -39,7 +41,12 @@ if ($LASTEXITCODE -ne 0) {
 
 $Dll = Join-Path $Build "STRPluginMessagingAPI.dll"
 $BridgeDll = Join-Path $Build "STRPluginMessagingBridge.dll"
-foreach ($RequiredDll in @($Dll, $BridgeDll)) {
+$DiagnosticDll = Join-Path $Build "STRPluginMessagingDiagnostic.dll"
+$RequiredDlls = @($Dll, $BridgeDll)
+if ($IncludeDiagnostic) {
+    $RequiredDlls += $DiagnosticDll
+}
+foreach ($RequiredDll in $RequiredDlls) {
     if (-not (Test-Path -LiteralPath $RequiredDll -PathType Leaf)) {
         throw "DLL introuvable apres compilation: $RequiredDll"
     }
@@ -59,10 +66,10 @@ New-Item -ItemType Directory -Force -Path $PluginDir | Out-Null
 Copy-Item -LiteralPath $Dll -Destination (Join-Path $PluginDir "STRPluginMessagingAPI.dll") -Force
 Copy-Item -LiteralPath $BridgeDll -Destination (Join-Path $PluginDir "STRPluginMessagingBridge.dll") -Force
 
-# The v0.5.x diagnostic consumer remains in the repository/build graph for
-# regression tests, but it is intentionally not installed by the v0.6.0 package.
 $PackagedDiagnostic = Join-Path $PluginDir "STRPluginMessagingDiagnostic.dll"
-if (Test-Path -LiteralPath $PackagedDiagnostic) {
+if ($IncludeDiagnostic) {
+    Copy-Item -LiteralPath $DiagnosticDll -Destination $PackagedDiagnostic -Force
+} elseif (Test-Path -LiteralPath $PackagedDiagnostic) {
     Remove-Item -LiteralPath $PackagedDiagnostic -Force
 }
 
@@ -85,8 +92,13 @@ try {
             throw "Entree absente de l'archive: $RequiredEntry"
         }
     }
-    if ($Entries -contains "Data/SKSE/Plugins/STRPluginMessagingDiagnostic.dll") {
-        throw "Le client diagnostic ne doit pas etre inclus dans le package v0.6.0."
+
+    $DiagnosticEntry = "Data/SKSE/Plugins/STRPluginMessagingDiagnostic.dll"
+    if ($IncludeDiagnostic -and $Entries -notcontains $DiagnosticEntry) {
+        throw "Le client diagnostic est absent du package de test v0.6.0."
+    }
+    if (-not $IncludeDiagnostic -and $Entries -contains $DiagnosticEntry) {
+        throw "Le client diagnostic ne doit pas etre inclus dans le package normal v0.6.0."
     }
 } finally {
     $Archive.Dispose()
