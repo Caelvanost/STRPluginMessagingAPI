@@ -7,6 +7,7 @@ namespace STRPMChatUiSuppressV2
     namespace detail
     {
         using Base = STRPMChatUiSuppress::detail::CandidateBreakpoint;
+        constexpr std::size_t kMaxSafeCandidateCount = 256;
 
         // TiltedPhoques::StlAllocator<T> stores one Allocator* on MSVC x64.
         // std::basic_string therefore contains the allocator pointer followed by
@@ -183,6 +184,59 @@ namespace STRPMChatUiSuppressV2
             context->Rip = static_cast<DWORD64>(candidate->address);
             return EXCEPTION_CONTINUE_EXECUTION;
         }
+    }
+
+    inline std::vector<std::uintptr_t> ResolveCandidateFunctions(void* allocationBase)
+    {
+        std::vector<std::uintptr_t> functions;
+        if (!allocationBase)
+            return functions;
+
+        const auto spans = STRPMChatUiSuppress::detail::EnumerateMemory(allocationBase);
+        constexpr std::size_t literalBytes =
+            sizeof(STRPMChatUiSuppress::detail::kOverlayMessageLiteral) - 1;
+        auto literals = STRPMChatUiSuppress::detail::FindBytes(
+            spans,
+            STRPMChatUiSuppress::detail::kOverlayMessageLiteral,
+            literalBytes,
+            true,
+            false);
+        std::sort(literals.begin(), literals.end());
+        literals.erase(std::unique(literals.begin(), literals.end()), literals.end());
+
+        const auto xrefs = STRPMChatUiSuppress::detail::FindRipXrefs(spans, literals);
+        for (const auto xref : xrefs)
+        {
+            DWORD64 imageBase = 0;
+            const auto* runtime = RtlLookupFunctionEntry(
+                static_cast<DWORD64>(xref),
+                &imageBase,
+                nullptr);
+            if (!runtime || imageBase == 0)
+                continue;
+
+            const auto begin = static_cast<std::uintptr_t>(
+                imageBase + runtime->BeginAddress);
+            const auto end = static_cast<std::uintptr_t>(
+                imageBase + runtime->EndAddress);
+            if (begin == 0 || end <= begin || end - begin > 0x4000)
+                continue;
+            functions.push_back(begin);
+        }
+
+        std::sort(functions.begin(), functions.end());
+        functions.erase(std::unique(functions.begin(), functions.end()), functions.end());
+
+        // Do not truncate by address: that could silently discard the real
+        // OverlayService callback. An unexpectedly broad candidate set is an
+        // unsupported runtime shape, so fail closed instead.
+        if (functions.size() > detail::kMaxSafeCandidateCount)
+        {
+            STRPMChatUiSuppress::detail::Log(
+                "STRPM chat UI suppression candidate set exceeded safety limit");
+            functions.clear();
+        }
+        return functions;
     }
 
     inline bool ArmCandidates(const std::vector<std::uintptr_t>& functions)
