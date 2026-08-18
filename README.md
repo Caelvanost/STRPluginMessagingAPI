@@ -2,206 +2,118 @@
 
 Shared messaging broker for Skyrim Together Reborn compatibility mods.
 
-Current development version: **v0.5.1**.
+Current development version: **v0.6.0**.
 
-The project provides one common API for SKSE mods that need to exchange small,
-namespaced messages between Skyrim Together players. The current implementation
-targets the **official Skyrim Together Reborn 1.8.0 client and server** and uses
-STR's existing connection rather than opening a separate UDP transport.
-
-## Why
-
-Several STR compatibility mods need essentially the same networking layer:
-
-- OStimTogether: scene start/node/stop, actor poses, furniture alignment.
-- MorphSyncTogether: RaceMenu BodyMorph and overlay snapshots.
-- IEDSyncTogether: Immersive Equipment Displays visual equipment slots.
-- TradeTogether: consent-based targeted trade requests.
-
-STRPluginMessagingAPI centralizes that contract so each mod can register a
-channel and exchange payloads without implementing its own discovery, relay,
-peer cache or firewall-visible UDP port.
+STRPluginMessagingAPI gives SKSE mods one common messaging layer over the
+**official Skyrim Together Reborn 1.8.0 connection**. It is intended for mods
+such as OStimTogether, MorphSyncTogether, IEDSyncTogether and TradeTogether so
+each project does not need to implement its own networking transport.
 
 ## Architecture
 
 ```text
-SKSE compatibility mod
-        |
-        v
+consumer SKSE mod
+    ↓
 STRPluginMessagingAPI.dll
-        |
-        v
+    ↓
 STRPluginMessagingBridge.dll
-        |
-        v
-official Skyrim Together Reborn 1.8.0 client
-        |
-        | existing STR chat/network connection
-        v
-official STR 1.8.0 server
-        |
-        v
-strpm-chat-relay Lua resource
-        |
-        v
-target official STR client
-        |
-        v
+    ↓
+official STR 1.8.0 chat/network path
+    ↓
+official STR server + strpm-chat-relay Lua resource
+    ↓
+remote STR client
+    ↓
 STRPluginMessagingBridge.dll
-        |
-        v
-registered STRPM channel callback
+    ↓
+registered public STRPM callback
 ```
 
-STRPM payloads are encoded inside reserved `STRPM|v2|...` chat envelopes. The
-server resource intercepts those envelopes and performs explicit STRPM routing;
-normal player chat is left untouched.
+STRPM payloads are encoded inside reserved `STRPM|v2|...` envelopes. The server
+resource intercepts them, adds the authenticated STR sender identity and relays
+them to the requested target. No custom STR executable, custom opcode or
+separate client UDP port is required.
 
-This avoids a custom STR protocol fork, custom opcodes, a custom server binary,
-and separate client-mod UDP ports.
+## Current Status
+
+The native STR transport is now validated in game on two clients.
+
+Validated:
+
+- SKSE loading on Skyrim 1.6.1170 / SKSE64 2.2.6;
+- dynamic runtime discovery against official STR 1.8.0;
+- exact UTF-16 `OverlayClient::ProcessChatMessage` anchor resolution;
+- `TransportService::Send` resolution and live instance capture;
+- RTTI-based `NotifyChatMessageBroadcast::DeserializeRaw` receive hook;
+- server Lua relay using the official STR scripting API;
+- Player1 → Player2 payload delivery;
+- Player2 → Player1 payload delivery;
+- loopback delivery;
+- sender connection ID and sender name metadata;
+- reliable/ordered flags;
+- public API channel registration and callback delivery;
+- automatic bidirectional E2E handshake in the v0.5.1 diagnostic client.
+
+### v0.6.0
+
+v0.6.0 adds **STRPM chat UI suppression**.
+
+The validated transport and receive path are left unchanged. A separate bridge
+helper dynamically resolves candidate client functions referencing the CEF
+`"message"` event and identifies `OverlayService::OnChatMessageReceived` at
+runtime. When the callback receives a `NotifyChatMessageBroadcast` whose
+`ChatMessage` begins with `STRPM|v2|`, the helper returns before STR calls
+`ExecuteAsync("message", ...)`.
+
+Normal STR chat still follows the original STR code path untouched.
+
+The filter relies on the official STR/TiltedCore MSVC x64 ABI:
+
+- `AllocatorCompatible` stores one allocator pointer;
+- `TiltedPhoques::StlAllocator<T>` stores one allocator pointer;
+- `TiltedPhoques::String` is `std::basic_string<char, ..., StlAllocator<char>>`;
+- the resulting `NotifyChatMessageBroadcast::ChatMessage` field is read at
+  offset `0x48` for the official STR 1.8.0 build.
+
+The helper first excludes the bridge DLL's own copy of the STR runtime anchor,
+then resolves only the external mapped STR allocation. Unsupported or ambiguous
+runtime layouts fail closed and leave normal chat behavior unchanged.
 
 ## Public API
 
-The broker exposes:
-
-```cpp
-STR_QueryPluginMessagingInterface(version, outInterface)
-```
-
-Client mods can register a namespaced channel, send opaque bytes, receive sender
-metadata and payload callbacks, and optionally set the local Skyrim display
-name. The stable public header is:
+The public header is:
 
 ```text
 include/STRPluginMessagingAPI/STRPluginMessagingAPI.h
 ```
 
-The version-specific bridge uses the private transport ABI:
+Main export:
+
+```cpp
+STR_QueryPluginMessagingInterface(version, outInterface)
+```
+
+Consumer mods can:
+
+- register/unregister a namespaced channel;
+- send opaque payload bytes;
+- target server, host, one player or all players;
+- receive sender ID/name, flags and sequence metadata;
+- set their local display name.
+
+The STR-version-specific bridge uses the private transport export:
 
 ```text
 STRPM_QueryTransportInterface
 ```
 
-Client mods never need to know STR internal addresses.
+Consumer mods never need STR internal addresses.
 
-## Current Status
-
-The project is at the **two-client end-to-end STR transport validation stage**.
-The native STR 1.8.0 resolver has been validated in game through:
-
-- exact UTF-16 `OverlayClient::ProcessChatMessage` anchor discovery;
-- unique RIP xref and function-bound resolution;
-- unique `TransportService::Send` detection through the `Buffer(1 << 16)` heuristic;
-- temporary breakpoint capture of the live `TransportService*`;
-- RTTI resolution and breakpoint arming for `NotifyChatMessageBroadcast::DeserializeRaw`;
-- successful bridge-ready state after a real STR chat message.
-
-The first v0.5.0 two-client run also validated real server-relayed payloads:
-Player1 received both of its own loopback probes and both probes from Player2.
-Player2 received its own loopbacks, but Player1's initial probes had already been
-sent before Player2 became receive-ready. v0.5.1 therefore adds a peer-triggered
-ACK handshake so the test proves both directions regardless of startup timing.
-
-Implemented:
-
-- public C messaging API and runtime;
-- STR-only packaged configuration;
-- private bridge ABI and diagnostics;
-- official-server Lua relay;
-- targeted and all-player routing;
-- `kMessageAllowLoopback` handling on the server relay;
-- payload fragmentation and reassembly;
-- runtime resolution of `OverlayClient::ProcessChatMessage` and
-  `TransportService::Send` from the mapped STR 1.8.0 image;
-- temporary breakpoint capture of the live `TransportService` instance;
-- ABI-compatible chat-message proxy that lets STR itself perform the normal
-  `ClientMessage::Serialize` and network send path;
-- RTTI-based resolution of `NotifyChatMessageBroadcast::DeserializeRaw`;
-- non-destructive receive parsing directly from STR's `Buffer::Reader`;
-- authenticated sender ID/name extraction from server-appended metadata;
-- delivery of completed payloads through the STRPM receive callback;
-- lazy bootstrap so the bridge can load before the player connects through F2;
-- receive RTTI resolution remains deferred until the send resolver has positively
-  identified the mapped STR 1.8.0 runtime;
-- chunked `ReadProcessMemory` snapshots for safe runtime scanning;
-- exact UTF-16 STR 1.8.0 chat anchor;
-- resolver timing and failure diagnostics;
-- external public-API diagnostic client for two-player E2E testing;
-- v0.5.1 peer-triggered ACK handshake and reduced pre-ready retry cadence;
-- Windows CI build validation and DLL artifact generation.
-
-Still to validate or complete:
-
-- confirm `E2E BIDIRECTIONAL HANDSHAKE COMPLETE` on both clients;
-- suppress relayed `STRPM|v2|...` envelopes from the visible STR chat UI
-  (they currently appear as yellow technical chat lines after being decoded);
-- local STR connection-ID discovery;
-- final host-target semantics;
-- migrating the individual compatibility mods onto the shared API.
-
-Until the native runtime has been resolved and captured, `send()` returns
-`kNotConnected`. Unsupported/ambiguous builds fail closed rather than calling an
-uncertain address.
-
-## v0.5.1 End-to-End Diagnostic Client
-
-`STRPluginMessagingDiagnostic.dll` is a temporary SKSE plugin included in the
-v0.5.1 package. It deliberately behaves like an external consumer mod instead
-of calling private broker/bridge internals.
-
-At startup it:
-
-1. waits for SKSE to load `STRPluginMessagingAPI.dll`;
-2. registers channel `strpm.test` through the public `registerChannel()` API;
-3. retries `send()` at a reduced cadence while the native STR bridge is not ready;
-4. after the local player sends one ordinary STR chat message and the bridge
-   captures `TransportService*`, sends two probes five seconds apart;
-5. targets `kAllPlayers` with `Reliable | Ordered | AllowLoopback`;
-6. logs every callback received from the public API, including sender ID/name,
-   sequence, flags and payload;
-7. when a probe from the other PC is observed, sends one automatic ACK;
-8. reports `E2E BIDIRECTIONAL HANDSHAKE COMPLETE` after both a local ACK send and
-   an ACK from the peer have been observed.
-
-Probe payloads use:
+## Compatibility Target
 
 ```text
-STRPM_E2E_V1|probe=<1|2>|pc=<computer>|pid=<process>
-```
-
-ACK payloads use:
-
-```text
-STRPM_E2E_V1|ack=1|pc=<computer>|pid=<process>
-```
-
-The diagnostic log is written to:
-
-```text
-Documents/My Games/Skyrim Special Edition/SKSE/STRPluginMessagingDiagnostic.log
-```
-
-For a two-client validation, install the same v0.5.1 package on both PCs, connect
-both players to the same STR server, then send one ordinary STR chat message on
-each client. Startup order no longer matters: the first peer probe seen by a
-ready client triggers an ACK, which causes the opposite direction to be tested.
-Both diagnostic logs should eventually contain:
-
-```text
-E2E PEER OBSERVED ...
-E2E ACK SEND OK ...
-E2E PEER ACK OBSERVED ...
-E2E BIDIRECTIONAL HANDSHAKE COMPLETE
-```
-
-`STRPluginMessagingDiagnostic.dll` is a validation aid and should be removed or
-disabled after the E2E transport test is complete.
-
-## STR 1.8.0 Compatibility Target
-
-```text
-Skyrim Together Reborn 1.8.0
-TiltedEvolution tag: v1.8.0
+Skyrim Together Reborn: 1.8.0
+TiltedEvolution tag:    v1.8.0
 TiltedEvolution commit: 9c23efa422bbc1e5c06eef5522ca73971a513e35
 ```
 
@@ -212,29 +124,19 @@ Size:    7,058,432 bytes
 SHA-256: 77f23c9c82c412252b5c4491a09d7ab4349cbc6c77992c4766882f54798cb99d
 ```
 
-The public executable is packed/restructured, so the bridge resolves the
-required client code from the **mapped runtime image** instead of relying on
-absolute file offsets.
-
-Research notes:
-
-```text
-docs/OFFICIAL_STR_CHAT_TUNNEL.md
-docs/STR_1_8_0_BINARY_FINGERPRINT.md
-docs/STR_1_8_0_RTTI_NOTES.md
-```
-
 ## Server Resource
 
-The relay lives in:
+Install/enable:
 
 ```text
 extras/str-server-resources/strpm-chat-relay/
 ```
 
-It uses STR's documented server scripting API. Client-originated STRPM messages
-are cancelled as normal chat, validated, tagged with the authenticated STR
-sender identity and relayed to the requested target.
+The server console should report:
+
+```text
+[STRPM] Chat relay v2 loaded
+```
 
 ## Build
 
@@ -243,108 +145,71 @@ cmake -S . -B build
 cmake --build build --config Release
 ```
 
-The default build is STR-only. The legacy UDP backend is retained only for
-explicit development builds:
-
-```powershell
-cmake -S . -B build -DSTRPM_ENABLE_UDP_BACKEND=ON
-```
-
-### Vortex package
+Vortex package:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File .\build-vortex.ps1
 ```
 
-The generated archive is written to:
+Output:
 
 ```text
-dist/STRPluginMessagingAPI-v0.5.1-Vortex.zip
+dist/STRPluginMessagingAPI-v0.6.0-Vortex.zip
 ```
 
-`dist/` is ignored by Git.
-
-## Vortex Layout
+## v0.6.0 Vortex Layout
 
 ```text
 Data/SKSE/Plugins/STRPluginMessagingAPI.dll
 Data/SKSE/Plugins/STRPluginMessagingAPI.ini
 Data/SKSE/Plugins/STRPluginMessagingBridge.dll
-Data/SKSE/Plugins/STRPluginMessagingDiagnostic.dll
 ```
 
-All three DLLs are valid SKSE plugins in the v0.5.1 validation package. The
-broker resolves the bridge by module name relative to its own directory, so
-startup does not depend on the SKSE plugin load order or on the process current
-working directory.
+`STRPluginMessagingDiagnostic.dll` remains in the source/build graph as a
+regression-test client but is **not packaged** in v0.6.0.
 
-The default INI points to:
+## Expected Runtime Logs
 
-```ini
-[Transport]
-Mode=STR
-STRBridgeModule=STRPluginMessagingBridge.dll
-```
-
-No legacy UDP port is opened by the packaged STR-only build.
-
-## Runtime Startup Sequence
-
-The bridge can initialize before Skyrim Together is connected. Its bootstrap
-retries periodically and follows this order:
+After STR runtime resolution:
 
 ```text
-SKSE loads STRPM
-        |
-        v
-scan exact UTF-16 STR chat anchor in 1 MiB snapshots
-        |
-        v
-resolve ProcessChatMessage RIP xref
-        |
-        v
-TransportService::Send resolved
-        |
-        +--> temporary capture breakpoint armed
-        |
-        v
-receive RTTI resolver starts
-        |
-        v
-NotifyChatMessageBroadcast receive hook armed
-        |
-        v
-player sends one ordinary STR chat message
-        |
-        v
-live TransportService* captured
-        |
-        v
-STRPM bridge ready
+TransportService::Send resolved: ...
+temporary TransportService::Send capture breakpoint armed
+NotifyChatMessageBroadcast::DeserializeRaw = ...
+receive breakpoint armed for NotifyChatMessageBroadcast::DeserializeRaw
 ```
 
-The receive resolver is deliberately not allowed to scan before the send
-resolver confirms that the STR runtime is present. During early startup, send
-resolver parsing is performed only on bounded local snapshots copied with
-`ReadProcessMemory`; if a candidate chunk is remapped while it is being copied,
-that chunk is skipped and the bootstrap retries later. Comparisons inside a
-snapshot are ordinary local-memory comparisons and do not call
-`ReadProcessMemory` again.
+After one ordinary STR chat message captures the live transport:
 
-## Repository Layout
+```text
+TransportService instance captured: ...
+STRPM bridge ready: native STR send captured and receive hook armed
+```
 
-- `include/STRPluginMessagingAPI/` — stable public API for mod authors.
-- `src/` — broker runtime, STR bridge and diagnostic client.
-- `package/` — default Vortex install files.
-- `examples/` — minimal API usage example.
-- `docs/` — migration, transport design, binary and RTTI research.
-- `extras/str-server-resources/` — official STR server Lua relay resource.
-- `.github/workflows/` — Windows MSVC build validation.
-- `dist/` — locally generated release archives; ignored by Git.
+For v0.6.0 UI suppression, the bridge should additionally report:
+
+```text
+STRPM chat UI suppression bootstrap started
+STRPM chat UI suppression candidates armed: ...
+STRPM chat UI filter identified OverlayService::OnChatMessageReceived = ...
+```
+
+The final identification line is expected only after the first received STRPM
+envelope reaches the STR overlay callback.
+
+## Remaining Work
+
+- validate v0.6.0 UI suppression on both clients;
+- discover/report the local STR connection ID directly;
+- finalize `Host` target semantics;
+- reduce pre-ready `send()` noise/retries;
+- migrate OStimTogether, MorphSyncTogether, IEDSyncTogether and TradeTogether to
+  the shared API;
+- remove temporary diagnostic-only code when no longer useful.
 
 ## Design Rule
 
 All STR-version-specific discovery and hooking belongs inside
-`STRPluginMessagingBridge.dll`. The public API and mods using it must remain
-independent of STR internal addresses so a future STR update only requires a
+`STRPluginMessagingBridge.dll`. The public API and consumer mods must remain
+independent of STR internal addresses so future STR updates only require a
 bridge compatibility update.
