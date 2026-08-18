@@ -532,7 +532,7 @@ namespace STRPMChatUiSuppressV3
         if (!detail::ReadProcessValue(executeAsyncAddress, original))
             return false;
 
-        detail::g_executeAsyncBreakpoint = Base{ executeAsyncAddress, original, false };
+        detail::g_executeAsyncBreakpoint = detail::Base{ executeAsyncAddress, original, false };
         if (!STRPMChatUiSuppress::detail::PatchByte(executeAsyncAddress, 0xCC))
             return false;
 
