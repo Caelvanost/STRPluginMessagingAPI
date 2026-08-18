@@ -1,6 +1,6 @@
 #pragma once
 
-#include "STRPMChatUiSuppressV2.h"
+#include "STRPMChatUiSuppressV3.h"
 
 namespace STRPMChatUiSuppressBootstrap
 {
@@ -54,38 +54,40 @@ namespace STRPMChatUiSuppressBootstrap
 
         inline DWORD WINAPI Worker(void*) noexcept
         {
+            std::optional<std::uintptr_t> executeAsyncAddress;
+
             for (std::uint32_t attempt = 0;
                  attempt < 120 && !STRPMChatUiSuppress::detail::g_stopRequested.load();
                  ++attempt)
             {
-                if (auto* allocationBase = ResolveExternalStrAllocationBase();
-                    allocationBase != nullptr)
+                if (!executeAsyncAddress)
                 {
-                    const auto candidates =
-                        STRPMChatUiSuppressV2::ResolveCandidateFunctions(allocationBase);
-                    if (STRPMChatUiSuppressV2::ArmCandidates(candidates))
+                    if (auto* allocationBase = ResolveExternalStrAllocationBase();
+                        allocationBase != nullptr)
                     {
-                        FILE* file = nullptr;
-                        fopen_s(
-                            &file,
-                            "Data\\SKSE\\Plugins\\STRPluginMessagingBridge.log",
-                            "a");
-                        if (file)
-                        {
-                            std::fprintf(
-                                file,
-                                "STRPM chat UI suppression candidates armed: %zu\n",
-                                STRPMChatUiSuppressV2::CandidateCount());
-                            std::fclose(file);
-                        }
+                        executeAsyncAddress =
+                            STRPMChatUiSuppressV3::ResolveExecuteAsync(allocationBase);
+                    }
+                }
+
+                // The UI observer must be registered after the receive VEH so it
+                // is inserted ahead of it and can observe DeserializeRaw without
+                // changing the validated receiver implementation.
+                if (executeAsyncAddress && STRPMBridgeReceive::IsResolved())
+                {
+                    if (STRPMChatUiSuppressV3::Arm(*executeAsyncAddress))
+                    {
+                        STRPMChatUiSuppress::detail::Log(
+                            "STRPM chat UI suppression armed at OverlayApp::ExecuteAsync");
                         return 0;
                     }
                 }
+
                 Sleep(1000);
             }
 
             STRPMChatUiSuppress::detail::Log(
-                "STRPM chat UI suppression resolver did not arm candidates");
+                "STRPM chat UI suppression resolver did not arm OverlayApp::ExecuteAsync");
             return 0;
         }
     }
