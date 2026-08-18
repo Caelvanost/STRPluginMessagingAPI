@@ -1,6 +1,6 @@
 param(
     [string]$Configuration = "Release",
-    [string]$Version = "0.5.1"
+    [string]$Version = "0.6.0"
 )
 
 $ErrorActionPreference = "Stop"
@@ -39,8 +39,7 @@ if ($LASTEXITCODE -ne 0) {
 
 $Dll = Join-Path $Build "STRPluginMessagingAPI.dll"
 $BridgeDll = Join-Path $Build "STRPluginMessagingBridge.dll"
-$DiagnosticDll = Join-Path $Build "STRPluginMessagingDiagnostic.dll"
-foreach ($RequiredDll in @($Dll, $BridgeDll, $DiagnosticDll)) {
+foreach ($RequiredDll in @($Dll, $BridgeDll)) {
     if (-not (Test-Path -LiteralPath $RequiredDll -PathType Leaf)) {
         throw "DLL introuvable apres compilation: $RequiredDll"
     }
@@ -59,7 +58,13 @@ $PluginDir = Join-Path $Stage "Data\SKSE\Plugins"
 New-Item -ItemType Directory -Force -Path $PluginDir | Out-Null
 Copy-Item -LiteralPath $Dll -Destination (Join-Path $PluginDir "STRPluginMessagingAPI.dll") -Force
 Copy-Item -LiteralPath $BridgeDll -Destination (Join-Path $PluginDir "STRPluginMessagingBridge.dll") -Force
-Copy-Item -LiteralPath $DiagnosticDll -Destination (Join-Path $PluginDir "STRPluginMessagingDiagnostic.dll") -Force
+
+# The v0.5.x diagnostic consumer remains in the repository/build graph for
+# regression tests, but it is intentionally not installed by the v0.6.0 package.
+$PackagedDiagnostic = Join-Path $PluginDir "STRPluginMessagingDiagnostic.dll"
+if (Test-Path -LiteralPath $PackagedDiagnostic) {
+    Remove-Item -LiteralPath $PackagedDiagnostic -Force
+}
 
 Compress-Archive `
     -Path (Join-Path $Stage "*") `
@@ -74,12 +79,14 @@ try {
     foreach ($RequiredEntry in @(
         "Data/SKSE/Plugins/STRPluginMessagingAPI.dll",
         "Data/SKSE/Plugins/STRPluginMessagingAPI.ini",
-        "Data/SKSE/Plugins/STRPluginMessagingBridge.dll",
-        "Data/SKSE/Plugins/STRPluginMessagingDiagnostic.dll"
+        "Data/SKSE/Plugins/STRPluginMessagingBridge.dll"
     )) {
         if ($Entries -notcontains $RequiredEntry) {
             throw "Entree absente de l'archive: $RequiredEntry"
         }
+    }
+    if ($Entries -contains "Data/SKSE/Plugins/STRPluginMessagingDiagnostic.dll") {
+        throw "Le client diagnostic ne doit pas etre inclus dans le package v0.6.0."
     }
 } finally {
     $Archive.Dispose()
