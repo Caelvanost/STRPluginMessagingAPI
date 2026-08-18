@@ -1,5 +1,5 @@
 #include "SKSEPluginVersionCompat.h"
-#include "STRPMChatUiSuppress.h"
+#include "STRPMChatUiSuppressBootstrap.h"
 
 #include <cstdint>
 #include <cstdio>
@@ -29,9 +29,10 @@ extern "C" __declspec(dllexport) bool SKSEPlugin_Load(const SKSEInterface*)
     }
 
     // UI suppression is independent from the transport hooks. It waits for the
-    // mapped STR 1.8.0 runtime and dynamically identifies OverlayService's chat
-    // callback before filtering only STRPM|v2| envelopes.
-    STRPMChatUiSuppress::Start();
+    // mapped STR 1.8.0 runtime, excludes the bridge's own signature copy, and
+    // dynamically identifies OverlayService's chat callback before filtering
+    // only STRPM|v2| envelopes.
+    STRPMChatUiSuppressBootstrap::Start();
 
     // The transport hooks are initialized later by STRPluginMessagingAPI via
     // STRPM_QueryTransportInterface.
