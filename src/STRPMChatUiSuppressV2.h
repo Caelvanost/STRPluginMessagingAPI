@@ -193,8 +193,10 @@ namespace STRPMChatUiSuppressV2
             return functions;
 
         const auto spans = STRPMChatUiSuppress::detail::EnumerateMemory(allocationBase);
+        // Include the terminating NUL so we only match the exact CEF event literal
+        // "message\0", not arbitrary words that merely contain "message".
         constexpr std::size_t literalBytes =
-            sizeof(STRPMChatUiSuppress::detail::kOverlayMessageLiteral) - 1;
+            sizeof(STRPMChatUiSuppress::detail::kOverlayMessageLiteral);
         auto literals = STRPMChatUiSuppress::detail::FindBytes(
             spans,
             STRPMChatUiSuppress::detail::kOverlayMessageLiteral,
