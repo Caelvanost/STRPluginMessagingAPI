@@ -22,14 +22,20 @@ namespace
 {
     constexpr char kDiagnosticChannel[] = "strpm.test";
     constexpr auto kApiRetryDelay = std::chrono::milliseconds(500);
+    constexpr auto kConnectionPollDelay = std::chrono::milliseconds(250);
+    constexpr auto kConnectionSettleDelay = std::chrono::seconds(1);
     constexpr auto kSendRetryDelay = std::chrono::seconds(2);
     constexpr auto kSendRetryLogInterval = std::chrono::seconds(10);
     constexpr auto kProbeSpacing = std::chrono::seconds(5);
     constexpr auto kHandshakePollDelay = std::chrono::milliseconds(250);
+    constexpr auto kProxyPollDelay = std::chrono::milliseconds(250);
+    constexpr auto kProxyResolveTimeout = std::chrono::seconds(15);
     constexpr std::uint32_t kProbeFlags =
         STRPM::kMessageReliable |
         STRPM::kMessageOrdered |
         STRPM::kMessageAllowLoopback;
+
+    using IsSTRSessionConnectedFn = bool(STRPM_CALL*)();
 
     std::mutex g_logMutex;
     std::jthread g_worker;
@@ -37,6 +43,7 @@ namespace
     std::string g_computerName;
     std::atomic_bool g_peerObserved{ false };
     std::atomic_bool g_peerAckObserved{ false };
+    std::atomic<STRPM::ConnectionID> g_peerConnectionID{ 0 };
 
     void Log(const char* fmt, ...)
     {
@@ -84,6 +91,17 @@ namespace
         return payload.find(localPcField) == std::string_view::npos;
     }
 
+    bool IsSTRSessionConnected()
+    {
+        const auto bridge = GetModuleHandleW(L"STRPluginMessagingBridge.dll");
+        if (!bridge)
+            return false;
+        const auto raw = GetProcAddress(bridge, "STRPM_IsSTRSessionConnected");
+        if (!raw)
+            return false;
+        return reinterpret_cast<IsSTRSessionConnectedFn>(raw)();
+    }
+
     void STRPM_CALL ReceiveDiagnostic(
         const STRPM::Message* message,
         void*)
@@ -111,6 +129,7 @@ namespace
         if (!IsPeerDiagnosticPayload(payloadView))
             return;
 
+        g_peerConnectionID.store(message->sender.connectionID);
         if (!g_peerObserved.exchange(true))
         {
             Log(
@@ -161,6 +180,43 @@ namespace
             kProbeFlags);
     }
 
+    bool ResolvePeerProxy(
+        std::stop_token token,
+        const STRPM::ProxyResolverInterface* resolver)
+    {
+        if (!resolver)
+        {
+            Log("PROXY RESOLVE unavailable: public ProxyResolver interface not loaded");
+            return false;
+        }
+
+        const auto deadline = std::chrono::steady_clock::now() + kProxyResolveTimeout;
+        while (!token.stop_requested() && std::chrono::steady_clock::now() < deadline)
+        {
+            const auto peer = g_peerConnectionID.load();
+            if (peer != 0)
+            {
+                STRPM::ProxyFormID formID = STRPM::kInvalidProxyFormID;
+                const auto result = resolver->resolve(peer, &formID);
+                if (result == STRPM::Result::kOk && formID != STRPM::kInvalidProxyFormID)
+                {
+                    Log(
+                        "PROXY RESOLVE OK senderId=%llu formId=0x%08X",
+                        static_cast<unsigned long long>(peer),
+                        static_cast<unsigned>(formID));
+                    return true;
+                }
+            }
+            if (!SleepInterruptible(token, kProxyPollDelay))
+                return false;
+        }
+
+        Log(
+            "PROXY RESOLVE TIMEOUT senderId=%llu (handshake transport is healthy; inspect bridge ProxyResolver lifecycle logs)",
+            static_cast<unsigned long long>(g_peerConnectionID.load()));
+        return false;
+    }
+
     void DiagnosticWorker(std::stop_token token)
     {
         Log("diagnostic worker started; waiting for SKSE to load STRPluginMessagingAPI.dll");
@@ -185,7 +241,11 @@ namespace
         if (!api)
             return;
 
-        Log("public API v%u loaded", api->version);
+        const auto* proxyResolver = STRPM::LoadProxyResolverFromModule(
+            L"STRPluginMessagingAPI.dll");
+        Log("public API v%u loaded; ProxyResolver=%s",
+            api->version,
+            proxyResolver ? "available" : "unavailable");
         g_computerName = GetDiagnosticComputerName();
 
         const auto registerResult = api->registerChannel(
@@ -203,6 +263,16 @@ namespace
         }
         Log("registered public callback on channel '%s' for pc='%s'", kDiagnosticChannel, g_computerName.c_str());
 
+        Log("E2E waiting for authoritative STR OnConnected lifecycle event before sending probes");
+        while (!token.stop_requested() && !IsSTRSessionConnected())
+        {
+            if (!SleepInterruptible(token, kConnectionPollDelay))
+                return;
+        }
+        if (!SleepInterruptible(token, kConnectionSettleDelay))
+            return;
+        Log("E2E STR connection observed; diagnostic sends enabled");
+
         STRPM::Target target{};
         target.kind = STRPM::TargetKind::kAllPlayers;
 
@@ -210,6 +280,18 @@ namespace
         std::uint32_t probeNumber = 1;
         while (!token.stop_requested() && probeNumber <= 2)
         {
+            if (!IsSTRSessionConnected())
+            {
+                Log("E2E paused: STR disconnected while probes were pending");
+                while (!token.stop_requested() && !IsSTRSessionConnected())
+                {
+                    if (!SleepInterruptible(token, kConnectionPollDelay))
+                        return;
+                }
+                if (!SleepInterruptible(token, kConnectionSettleDelay))
+                    return;
+            }
+
             const auto payload =
                 std::string("STRPM_E2E_V1|probe=") + std::to_string(probeNumber) +
                 "|pc=" + g_computerName +
@@ -234,9 +316,7 @@ namespace
             if (lastWaitingLog.time_since_epoch().count() == 0 ||
                 now - lastWaitingLog >= kSendRetryLogInterval)
             {
-                Log(
-                    "E2E send waiting: %s (connect with F2, then send one normal STR chat message on this client)",
-                    STRPM::ResultToString(result));
+                Log("E2E send waiting after connected event: %s", STRPM::ResultToString(result));
                 lastWaitingLog = now;
             }
 
@@ -280,6 +360,7 @@ namespace
             if (ackSent && g_peerAckObserved.load())
             {
                 Log("E2E BIDIRECTIONAL HANDSHAKE COMPLETE");
+                ResolvePeerProxy(token, proxyResolver);
                 return;
             }
 
@@ -292,7 +373,7 @@ namespace
 extern "C" __declspec(dllexport) STRPMSKSE::PluginVersionData SKSEPlugin_Version =
 {
     STRPMSKSE::PluginVersionData::kVersion,
-    STRPMSKSE::kPluginVersion_0_7_0,
+    STRPMSKSE::kPluginVersion_0_8_0,
     "STRPluginMessagingDiagnostic",
     "Caelvanost",
     "",
@@ -309,7 +390,7 @@ extern "C" __declspec(dllexport) bool SKSEPlugin_Load(const SKSEInterface*)
         fopen_s(&file, "Data\\SKSE\\Plugins\\STRPluginMessagingDiagnostic.log", "w");
         if (file)
         {
-            std::fprintf(file, "STRPluginMessagingDiagnostic v0.7.0: SKSEPlugin_Load entered\n");
+            std::fprintf(file, "STRPluginMessagingDiagnostic v0.8.0: SKSEPlugin_Load entered\n");
             std::fclose(file);
         }
     }
