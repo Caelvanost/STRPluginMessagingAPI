@@ -157,35 +157,41 @@ namespace STRPMProxyResolverTrace
 
         bool CaptureLifecycleCall(CONTEXT* context) noexcept
         {
-            using namespace STRPMProxyResolverBridge;
-            if (!context || !detail::g_traceActive)
+            if (!context || !STRPMProxyResolverBridge::detail::g_traceActive)
                 return false;
 
-            if (detail::g_traceKind == detail::HookKind::kPlayerLoaded &&
-                detail::IsPlausibleProxyFormID(context->Rcx))
+            if (STRPMProxyResolverBridge::detail::g_traceKind ==
+                    STRPMProxyResolverBridge::detail::HookKind::kPlayerLoaded &&
+                STRPMProxyResolverBridge::detail::IsPlausibleProxyFormID(context->Rcx))
             {
-                detail::g_traceFormID = static_cast<STRPM::ProxyFormID>(
-                    context->Rcx & 0xFFFFFFFFu);
+                STRPMProxyResolverBridge::detail::g_traceFormID =
+                    static_cast<STRPM::ProxyFormID>(context->Rcx & 0xFFFFFFFFu);
             }
 
             const auto index = static_cast<std::uint32_t>(context->Rdx & 0xFFFFFFFFu);
             const auto playerId = static_cast<std::uint32_t>(context->R8 & 0xFFFFFFFFu);
             const bool plausiblePlayerId =
-                playerId > 0 && playerId <= detail::kMaxPlausiblePlayerId;
+                playerId > 0 &&
+                playerId <= STRPMProxyResolverBridge::detail::kMaxPlausiblePlayerId;
 
             if (index != 0 || !plausiblePlayerId)
                 return false;
 
-            if (detail::g_traceKind == detail::HookKind::kPlayerLoaded &&
-                detail::g_traceFormID != STRPM::kInvalidProxyFormID)
+            if (STRPMProxyResolverBridge::detail::g_traceKind ==
+                    STRPMProxyResolverBridge::detail::HookKind::kPlayerLoaded &&
+                STRPMProxyResolverBridge::detail::g_traceFormID !=
+                    STRPM::kInvalidProxyFormID)
             {
-                detail::ObservePlayerProxy(playerId, detail::g_traceFormID);
+                STRPMProxyResolverBridge::detail::ObservePlayerProxy(
+                    playerId,
+                    STRPMProxyResolverBridge::detail::g_traceFormID);
                 return true;
             }
 
-            if (detail::g_traceKind == detail::HookKind::kPlayerUnloaded)
+            if (STRPMProxyResolverBridge::detail::g_traceKind ==
+                STRPMProxyResolverBridge::detail::HookKind::kPlayerUnloaded)
             {
-                detail::RemovePlayerProxy(playerId);
+                STRPMProxyResolverBridge::detail::RemovePlayerProxy(playerId);
                 return true;
             }
 
@@ -270,9 +276,8 @@ namespace STRPMProxyResolverTrace
             }
 
             // If a one-shot breakpoint cannot be armed, keep TF enabled. The
-            // original resolver will safely abandon the trace if control leaves
-            // the owning lifecycle function; this degrades to a missed mapping,
-            // not a modified control flow.
+            // trace will safely abandon if execution leaves the owning method;
+            // this degrades to a missed mapping, never modified call semantics.
             context->EFlags |= kTrapFlag;
             return EXCEPTION_CONTINUE_EXECUTION;
         }
