@@ -8,35 +8,12 @@ namespace STRPMChatUiSuppressV2
     {
         using Base = STRPMChatUiSuppress::detail::CandidateBreakpoint;
         constexpr std::size_t kMaxSafeCandidateCount = 256;
-
-        // TiltedPhoques::StlAllocator<T> stores one Allocator* on MSVC x64.
-        // std::basic_string therefore contains the allocator pointer followed by
-        // the ordinary 32-byte MSVC string value.
-        struct ShadowString
-        {
-            void* allocator{ nullptr };
-            union
-            {
-                char small[16];
-                const char* heap;
-            } storage{};
-            std::size_t size{ 0 };
-            std::size_t capacity{ 0 };
-        };
-        static_assert(sizeof(ShadowString) == 40);
-
-        // ServerMessage layout on MSVC x64:
-        //   0x00 vptr
-        //   0x08 AllocatorCompatible::m_pAllocator
-        //   0x10 ServerMessage::m_opcode (uint8) + padding
-        // NotifyChatMessageBroadcast:
-        //   0x18 MessageType (uint8) + padding
-        //   0x20 PlayerName (TiltedPhoques::String, 40 bytes)
-        //   0x48 ChatMessage (TiltedPhoques::String, 40 bytes)
-        constexpr std::size_t kChatMessageOffset = 0x48;
+        constexpr std::size_t kMessageProbeBytes = 0x100;
+        constexpr std::uint32_t kCandidateHitLogLimit = 4;
 
         inline std::vector<Base> g_candidates;
         inline std::atomic<std::uintptr_t> g_filterAddress{ 0 };
+        inline std::array<std::atomic_uint32_t, kMaxSafeCandidateCount> g_candidateHitCounts{};
         inline PVOID g_vectoredHandler = nullptr;
         inline thread_local std::uintptr_t g_rearmAddress = 0;
 
@@ -50,53 +27,112 @@ namespace STRPMChatUiSuppressV2
             return nullptr;
         }
 
+        inline bool StartsWithEnvelopePrefix(std::uintptr_t address) noexcept
+        {
+            if (address < 0x10000 || address > 0x00007FFFFFFFFFFFULL)
+                return false;
+
+            constexpr auto prefix = STRPMChatUiSuppress::detail::kEnvelopePrefix;
+            std::array<char, 16> bytes{};
+            SIZE_T bytesRead = 0;
+            if (!ReadProcessMemory(
+                    GetCurrentProcess(),
+                    reinterpret_cast<const void*>(address),
+                    bytes.data(),
+                    prefix.size(),
+                    &bytesRead) ||
+                bytesRead != prefix.size())
+            {
+                return false;
+            }
+
+            return std::string_view(bytes.data(), prefix.size()) == prefix;
+        }
+
+        // Do not hard-code the internal TiltedPhoques::String layout here.
+        // The public STR 1.8.0 binary is built with custom allocator types whose
+        // exact MSVC object layout is not part of STR's stable ABI. Instead, probe
+        // only a small snapshot of NotifyChatMessageBroadcast and look for the
+        // reserved STRPM prefix either inline (SSO) or at pointer-valued fields
+        // stored inside the object (heap-backed strings). All reads go through
+        // ReadProcessMemory so a stale/remapped runtime page fails closed.
         inline bool ReadEnvelopePrefix(const void* messageObject) noexcept
         {
             if (!messageObject)
                 return false;
 
-            ShadowString chat{};
-            SIZE_T bytesRead = 0;
-            const auto stringAddress =
-                reinterpret_cast<std::uintptr_t>(messageObject) + kChatMessageOffset;
-            if (!ReadProcessMemory(
-                    GetCurrentProcess(),
-                    reinterpret_cast<const void*>(stringAddress),
-                    &chat,
-                    sizeof(chat),
-                    &bytesRead) ||
-                bytesRead != sizeof(chat))
-                return false;
-
             constexpr auto prefix = STRPMChatUiSuppress::detail::kEnvelopePrefix;
-            if (chat.allocator == nullptr ||
-                chat.size < prefix.size() ||
-                chat.size > 4096 ||
-                chat.capacity < chat.size ||
-                chat.capacity > (1u << 20))
+            std::array<std::uint8_t, kMessageProbeBytes> snapshot{};
+            SIZE_T bytesRead = 0;
+            ReadProcessMemory(
+                GetCurrentProcess(),
+                messageObject,
+                snapshot.data(),
+                snapshot.size(),
+                &bytesRead);
+
+            const auto usable = std::min<std::size_t>(
+                static_cast<std::size_t>(bytesRead),
+                snapshot.size());
+            if (usable < prefix.size())
                 return false;
 
-            std::array<char, 16> bytes{};
-            if (chat.capacity < 16)
+            // Inline/SSO representation.
+            for (std::size_t offset = 0; offset + prefix.size() <= usable; ++offset)
             {
-                std::memcpy(bytes.data(), chat.storage.small, prefix.size());
-            }
-            else
-            {
-                if (!chat.storage.heap)
-                    return false;
-                SIZE_T prefixRead = 0;
-                if (!ReadProcessMemory(
-                        GetCurrentProcess(),
-                        chat.storage.heap,
-                        bytes.data(),
-                        prefix.size(),
-                        &prefixRead) ||
-                    prefixRead != prefix.size())
-                    return false;
+                if (std::memcmp(
+                        snapshot.data() + offset,
+                        prefix.data(),
+                        prefix.size()) == 0)
+                {
+                    return true;
+                }
             }
 
-            return std::string_view(bytes.data(), prefix.size()) == prefix;
+            // Heap-backed string representation. Pointer-sized fields in an MSVC
+            // x64 object are naturally aligned, so only inspect aligned slots and
+            // follow each candidate for the nine-byte reserved prefix.
+            for (std::size_t offset = 0;
+                 offset + sizeof(std::uintptr_t) <= usable;
+                 offset += alignof(std::uintptr_t))
+            {
+                std::uintptr_t pointer = 0;
+                std::memcpy(
+                    &pointer,
+                    snapshot.data() + offset,
+                    sizeof(pointer));
+                if (StartsWithEnvelopePrefix(pointer))
+                    return true;
+            }
+
+            return false;
+        }
+
+        inline void LogCandidateHit(
+            std::size_t index,
+            std::uintptr_t address,
+            std::uintptr_t messageObject,
+            bool envelope) noexcept
+        {
+            if (index >= g_candidateHitCounts.size())
+                return;
+
+            const auto previous = g_candidateHitCounts[index].fetch_add(1);
+            if (previous >= kCandidateHitLogLimit)
+                return;
+
+            FILE* file = nullptr;
+            fopen_s(&file, "Data\\SKSE\\Plugins\\STRPluginMessagingBridge.log", "a");
+            if (!file)
+                return;
+            std::fprintf(
+                file,
+                "STRPM chat UI candidate hit index=%zu address=0x%llX RDX=0x%llX envelope=%s\n",
+                index,
+                static_cast<unsigned long long>(address),
+                static_cast<unsigned long long>(messageObject),
+                envelope ? "yes" : "no");
+            std::fclose(file);
         }
 
         inline void DisarmOtherCandidates(std::uintptr_t keepAddress) noexcept
@@ -141,8 +177,13 @@ namespace STRPMChatUiSuppressV2
             if (!candidate || !candidate->armed)
                 return EXCEPTION_CONTINUE_SEARCH;
 
+            const auto messageObject = static_cast<std::uintptr_t>(context->Rdx);
             const bool envelope = ReadEnvelopePrefix(
-                reinterpret_cast<const void*>(context->Rdx));
+                reinterpret_cast<const void*>(messageObject));
+            const auto candidateIndex = static_cast<std::size_t>(
+                candidate - g_candidates.data());
+            LogCandidateHit(candidateIndex, address, messageObject, envelope);
+
             const auto filterAddress = g_filterAddress.load();
             if (envelope && (filterAddress == 0 || filterAddress == address))
             {
@@ -257,6 +298,9 @@ namespace STRPMChatUiSuppressV2
 
         detail::g_candidates.clear();
         detail::g_candidates.reserve(functions.size());
+        for (auto& hitCount : detail::g_candidateHitCounts)
+            hitCount.store(0);
+
         for (const auto address : functions)
         {
             std::uint8_t original = 0;
