@@ -10,6 +10,7 @@
 #include <chrono>
 #include <cstdarg>
 #include <cstdio>
+#include <iterator>
 #include <mutex>
 #include <string>
 #include <string_view>
@@ -51,7 +52,7 @@ namespace
         std::fclose(file);
     }
 
-    std::string GetComputerName()
+    std::string GetDiagnosticComputerName()
     {
         char name[MAX_COMPUTERNAME_LENGTH + 1]{};
         DWORD length = static_cast<DWORD>(std::size(name));
@@ -147,7 +148,7 @@ namespace
         g_listenerRegistered.store(true);
         Log("registered public callback on channel '%s'", kDiagnosticChannel);
 
-        const auto computerName = GetComputerName();
+        const auto computerName = GetDiagnosticComputerName();
         STRPM::Target target{};
         target.kind = STRPM::TargetKind::kAllPlayers;
 
