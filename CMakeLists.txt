@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.21)
 
 project(
     STRPluginMessagingAPI
-    VERSION 0.5.0
+    VERSION 0.5.1
     LANGUAGES CXX
 )
 
@@ -376,7 +376,7 @@ if(STRPM_BUILD_STR180_BRIDGE_PROBE)
     )
 endif()
 
-# v0.5.0 validation client. This is intentionally a separate SKSE plugin so it
+# v0.5.1 validation client. This is intentionally a separate SKSE plugin so it
 # exercises the same public API surface that consumer mods will use.
 add_library(STRPluginMessagingDiagnostic SHARED
     src/STRPluginMessagingDiagnosticSKSE.cpp
