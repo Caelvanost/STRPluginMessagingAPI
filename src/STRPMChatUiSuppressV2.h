@@ -13,7 +13,7 @@ namespace STRPMChatUiSuppressV2
 
         inline std::vector<Base> g_candidates;
         inline std::atomic<std::uintptr_t> g_filterAddress{ 0 };
-        inline std::array<std::atomic_uint32_t, kMaxSafeCandidateCount> g_candidateHitCounts{};
+        inline std::array<std::atomic<std::uint32_t>, kMaxSafeCandidateCount> g_candidateHitCounts{};
         inline PVOID g_vectoredHandler = nullptr;
         inline thread_local std::uintptr_t g_rearmAddress = 0;
 
