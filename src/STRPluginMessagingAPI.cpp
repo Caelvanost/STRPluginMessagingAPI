@@ -43,14 +43,12 @@ namespace STRPM
             return nullptr;
         }
 
-        const auto rawExport =
-            GetProcAddress(module, kQueryInterfaceExportName);
+        const auto rawExport = GetProcAddress(module, kQueryInterfaceExportName);
         if (rawExport == nullptr) {
             return nullptr;
         }
 
-        const auto queryInterface =
-            reinterpret_cast<QueryInterfaceFn>(rawExport);
+        const auto queryInterface = reinterpret_cast<QueryInterfaceFn>(rawExport);
 
         const Interface* api = nullptr;
         if (queryInterface(kInterfaceVersion, &api) != Result::kOk) {
@@ -77,22 +75,19 @@ namespace STRPM
             return nullptr;
         }
 
-        const auto rawExport =
-            GetProcAddress(module, kQueryDiagnosticsExportName);
+        const auto rawExport = GetProcAddress(module, kQueryDiagnosticsExportName);
         if (rawExport == nullptr) {
             return nullptr;
         }
 
-        const auto queryDiagnostics =
-            reinterpret_cast<QueryDiagnosticsFn>(rawExport);
+        const auto queryDiagnostics = reinterpret_cast<QueryDiagnosticsFn>(rawExport);
 
         const DiagnosticsInterface* diagnostics = nullptr;
         if (queryDiagnostics(kDiagnosticsVersion, &diagnostics) != Result::kOk) {
             return nullptr;
         }
 
-        if (diagnostics == nullptr ||
-            diagnostics->version != kDiagnosticsVersion) {
+        if (diagnostics == nullptr || diagnostics->version != kDiagnosticsVersion) {
             return nullptr;
         }
 
@@ -112,26 +107,55 @@ namespace STRPM
             return nullptr;
         }
 
-        const auto rawExport =
-            GetProcAddress(module, kQueryTransportExportName);
+        const auto rawExport = GetProcAddress(module, kQueryTransportExportName);
         if (rawExport == nullptr) {
             return nullptr;
         }
 
-        const auto queryTransport =
-            reinterpret_cast<QueryTransportInterfaceFn>(rawExport);
+        const auto queryTransport = reinterpret_cast<QueryTransportInterfaceFn>(rawExport);
 
         const TransportInterface* transport = nullptr;
         if (queryTransport(kTransportInterfaceVersion, &transport) != Result::kOk) {
             return nullptr;
         }
 
-        if (transport == nullptr ||
-            transport->version != kTransportInterfaceVersion) {
+        if (transport == nullptr || transport->version != kTransportInterfaceVersion) {
             return nullptr;
         }
 
         return transport;
+#else
+        (void)moduleName;
+        return nullptr;
+#endif
+    }
+
+    const ProxyResolverInterface* LoadProxyResolverFromModule(
+        const wchar_t* moduleName) noexcept
+    {
+#if defined(_WIN32)
+        const auto module = LoadPluginModule(moduleName);
+        if (module == nullptr) {
+            return nullptr;
+        }
+
+        const auto rawExport = GetProcAddress(module, kQueryProxyResolverExportName);
+        if (rawExport == nullptr) {
+            return nullptr;
+        }
+
+        const auto queryProxyResolver = reinterpret_cast<QueryProxyResolverFn>(rawExport);
+
+        const ProxyResolverInterface* resolver = nullptr;
+        if (queryProxyResolver(kProxyResolverVersion, &resolver) != Result::kOk) {
+            return nullptr;
+        }
+
+        if (resolver == nullptr || resolver->version != kProxyResolverVersion) {
+            return nullptr;
+        }
+
+        return resolver;
 #else
         (void)moduleName;
         return nullptr;
