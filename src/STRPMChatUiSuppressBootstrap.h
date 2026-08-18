@@ -62,7 +62,7 @@ namespace STRPMChatUiSuppressBootstrap
                     allocationBase != nullptr)
                 {
                     const auto candidates =
-                        STRPMChatUiSuppress::detail::ResolveCandidateFunctions(allocationBase);
+                        STRPMChatUiSuppressV2::ResolveCandidateFunctions(allocationBase);
                     if (STRPMChatUiSuppressV2::ArmCandidates(candidates))
                     {
                         FILE* file = nullptr;
