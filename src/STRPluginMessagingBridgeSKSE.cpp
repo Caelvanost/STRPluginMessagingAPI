@@ -5,6 +5,7 @@
 #include <cstdio>
 
 #include "STRPMProxyResolverBridge.h"
+#include "STRPMProxyResolverTrace.h"
 
 struct SKSEInterface;
 
@@ -35,6 +36,7 @@ extern "C" __declspec(dllexport) bool SKSEPlugin_Load(const SKSEInterface*)
     // v0.8.0 ProxyResolver is isolated here and observes canonical STR player
     // lifecycle data without scanning Skyrim ProcessLists or guessing actors.
     STRPMProxyResolverBridge::Start();
+    STRPMProxyResolverTrace::Start();
 
     // Transport hooks are initialized later by STRPluginMessagingAPI through
     // STRPM_QueryTransportInterface.
