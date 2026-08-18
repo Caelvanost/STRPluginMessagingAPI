@@ -130,6 +130,72 @@ namespace STRPMBridgeReceive
                    p == PAGE_EXECUTE_READWRITE || p == PAGE_EXECUTE_WRITECOPY;
         }
 
+        bool SnapshotProcessMemory(
+            std::uintptr_t address,
+            std::size_t size,
+            std::vector<std::uint8_t>& snapshot) noexcept
+        {
+            constexpr std::size_t kMaxSnapshotBytes = 2u * 1024u * 1024u;
+            snapshot.clear();
+            if (address == 0 || size == 0 || size > kMaxSnapshotBytes)
+                return false;
+
+            try
+            {
+                snapshot.resize(size);
+            }
+            catch (...)
+            {
+                snapshot.clear();
+                return false;
+            }
+
+            SIZE_T bytesRead = 0;
+            if (!ReadProcessMemory(
+                    GetCurrentProcess(),
+                    reinterpret_cast<const void*>(address),
+                    snapshot.data(),
+                    size,
+                    &bytesRead) ||
+                bytesRead != size)
+            {
+                snapshot.clear();
+                return false;
+            }
+            return true;
+        }
+
+        template <class T>
+        bool ReadProcessValue(std::uintptr_t address, T& value) noexcept
+        {
+            SIZE_T bytesRead = 0;
+            return address != 0 &&
+                   ReadProcessMemory(
+                       GetCurrentProcess(),
+                       reinterpret_cast<const void*>(address),
+                       &value,
+                       sizeof(T),
+                       &bytesRead) != FALSE &&
+                   bytesRead == sizeof(T);
+        }
+
+        int CompareBytes(const void* left, const void* right, std::size_t count) noexcept
+        {
+            if (count == 0)
+                return 0;
+            if (!left || !right)
+                return 1;
+
+            const auto* lhs = static_cast<const std::uint8_t*>(left);
+            const auto* rhs = static_cast<const std::uint8_t*>(right);
+            for (std::size_t i = 0; i < count; ++i)
+            {
+                if (lhs[i] != rhs[i])
+                    return lhs[i] < rhs[i] ? -1 : 1;
+            }
+            return 0;
+        }
+
         void ResolveSelfModule()
         {
             if (g_selfModule)
@@ -230,16 +296,30 @@ namespace STRPMBridgeReceive
             if (length == 0)
                 return result;
 
+            constexpr std::size_t kChunkBytes = 1u * 1024u * 1024u;
             for (const auto& span : g_memory)
             {
                 if (!span.readable || span.size < length)
                     continue;
 
-                const auto* bytes = reinterpret_cast<const std::uint8_t*>(span.base);
-                for (std::size_t i = 0; i + length <= span.size; ++i)
+                const auto overlap = length - 1;
+                for (std::size_t offset = 0; offset < span.size; offset += kChunkBytes)
                 {
-                    if (std::memcmp(bytes + i, text, length) == 0)
-                        result.push_back(span.base + i);
+                    const auto remaining = span.size - offset;
+                    const auto payloadBytes = std::min(kChunkBytes, remaining);
+                    const auto readBytes = std::min(remaining, payloadBytes + overlap);
+
+                    std::vector<std::uint8_t> snapshot;
+                    if (!SnapshotProcessMemory(span.base + offset, readBytes, snapshot))
+                        continue;
+
+                    for (std::size_t i = 0;
+                         i < payloadBytes && i + length <= snapshot.size();
+                         ++i)
+                    {
+                        if (CompareBytes(snapshot.data() + i, text, length) == 0)
+                            result.push_back(span.base + offset + i);
+                    }
                 }
             }
             return result;
@@ -276,6 +356,7 @@ namespace STRPMBridgeReceive
 
             const auto expectedImageBase = reinterpret_cast<std::uintptr_t>(tdMbi.AllocationBase);
             std::vector<std::uintptr_t> matches;
+            constexpr std::size_t kChunkBytes = 1u * 1024u * 1024u;
 
             for (const auto& span : g_memory)
             {
@@ -285,20 +366,37 @@ namespace STRPMBridgeReceive
                     continue;
                 }
 
-                for (std::size_t offset = 0; offset + sizeof(CompleteObjectLocator64) <= span.size; offset += 4)
+                for (std::size_t chunkOffset = 0; chunkOffset < span.size; chunkOffset += kChunkBytes)
                 {
-                    const auto address = span.base + offset;
-                    const auto* col = reinterpret_cast<const CompleteObjectLocator64*>(address);
-                    if (col->signature != 1 || col->selfRva <= 0 || col->typeDescriptorRva <= 0)
+                    const auto remaining = span.size - chunkOffset;
+                    const auto payloadBytes = std::min(kChunkBytes, remaining);
+                    const auto readBytes = std::min(
+                        remaining,
+                        payloadBytes + sizeof(CompleteObjectLocator64) - 1);
+
+                    std::vector<std::uint8_t> snapshot;
+                    if (!SnapshotProcessMemory(span.base + chunkOffset, readBytes, snapshot))
                         continue;
 
-                    const auto imageBase = address - static_cast<std::uintptr_t>(col->selfRva);
-                    if (imageBase != expectedImageBase)
-                        continue;
+                    for (std::size_t offset = 0;
+                         offset < payloadBytes && offset + sizeof(CompleteObjectLocator64) <= snapshot.size();
+                         offset += 4)
+                    {
+                        CompleteObjectLocator64 col{};
+                        std::memcpy(&col, snapshot.data() + offset, sizeof(col));
+                        if (col.signature != 1 || col.selfRva <= 0 || col.typeDescriptorRva <= 0)
+                            continue;
 
-                    const auto resolvedTypeDescriptor = imageBase + static_cast<std::uintptr_t>(col->typeDescriptorRva);
-                    if (resolvedTypeDescriptor == typeDescriptor)
-                        matches.push_back(address);
+                        const auto address = span.base + chunkOffset + offset;
+                        const auto imageBase = address - static_cast<std::uintptr_t>(col.selfRva);
+                        if (imageBase != expectedImageBase)
+                            continue;
+
+                        const auto resolvedTypeDescriptor =
+                            imageBase + static_cast<std::uintptr_t>(col.typeDescriptorRva);
+                        if (resolvedTypeDescriptor == typeDescriptor)
+                            matches.push_back(address);
+                    }
                 }
             }
 
@@ -317,35 +415,52 @@ namespace STRPMBridgeReceive
 
             const auto expectedAllocationBase = colMbi.AllocationBase;
             std::vector<std::uintptr_t> candidates;
+            constexpr std::size_t kChunkBytes = 1u * 1024u * 1024u;
 
             for (const auto& span : g_memory)
             {
                 if (!span.readable || span.allocationBase != expectedAllocationBase || span.size < sizeof(void*))
                     continue;
 
-                for (std::size_t offset = 0; offset + sizeof(std::uintptr_t) <= span.size; offset += sizeof(void*))
+                for (std::size_t chunkOffset = 0; chunkOffset < span.size; chunkOffset += kChunkBytes)
                 {
-                    const auto slot = span.base + offset;
-                    if (*reinterpret_cast<const std::uintptr_t*>(slot) != completeObjectLocator)
+                    const auto remaining = span.size - chunkOffset;
+                    const auto payloadBytes = std::min(kChunkBytes, remaining);
+                    const auto readBytes = std::min(remaining, payloadBytes + sizeof(std::uintptr_t) - 1);
+
+                    std::vector<std::uint8_t> snapshot;
+                    if (!SnapshotProcessMemory(span.base + chunkOffset, readBytes, snapshot))
                         continue;
 
-                    const auto vftable = slot + sizeof(void*);
-                    if (!IsReadableRange(vftable, sizeof(void*) * 5))
-                        continue;
-
-                    bool allExecutable = true;
-                    for (std::size_t index = 0; index < 5; ++index)
+                    for (std::size_t offset = 0;
+                         offset < payloadBytes && offset + sizeof(std::uintptr_t) <= snapshot.size();
+                         offset += sizeof(void*))
                     {
-                        const auto target = *reinterpret_cast<const std::uintptr_t*>(vftable + index * sizeof(void*));
-                        if (!IsExecutableAddress(target))
-                        {
-                            allExecutable = false;
-                            break;
-                        }
-                    }
+                        std::uintptr_t locator = 0;
+                        std::memcpy(&locator, snapshot.data() + offset, sizeof(locator));
+                        if (locator != completeObjectLocator)
+                            continue;
 
-                    if (allExecutable)
-                        candidates.push_back(vftable);
+                        const auto slot = span.base + chunkOffset + offset;
+                        const auto vftable = slot + sizeof(void*);
+                        if (!IsReadableRange(vftable, sizeof(void*) * 5))
+                            continue;
+
+                        bool allExecutable = true;
+                        for (std::size_t index = 0; index < 5; ++index)
+                        {
+                            std::uintptr_t target = 0;
+                            if (!ReadProcessValue(vftable + index * sizeof(void*), target) ||
+                                !IsExecutableAddress(target))
+                            {
+                                allExecutable = false;
+                                break;
+                            }
+                        }
+
+                        if (allExecutable)
+                            candidates.push_back(vftable);
+                    }
                 }
             }
 
@@ -381,9 +496,9 @@ namespace STRPMBridgeReceive
                 return false;
             }
 
-            const auto deserialize = *reinterpret_cast<const std::uintptr_t*>(
-                *vftable + 3 * sizeof(void*));
-            if (!IsExecutableAddress(deserialize))
+            std::uintptr_t deserialize = 0;
+            if (!ReadProcessValue(*vftable + 3 * sizeof(void*), deserialize) ||
+                !IsExecutableAddress(deserialize))
             {
                 Log("receive resolver: DeserializeRaw vftable target is not executable");
                 return false;
@@ -747,7 +862,8 @@ namespace STRPMBridgeReceive
                     return false;
             }
 
-            g_originalByte = *reinterpret_cast<const std::uint8_t*>(g_deserializeAddress);
+            if (!ReadProcessValue(g_deserializeAddress, g_originalByte))
+                return false;
             g_breakpointArmed.store(true);
             if (!PatchByte(g_deserializeAddress, 0xCC))
             {
