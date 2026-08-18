@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.21)
 
 project(
     STRPluginMessagingAPI
-    VERSION 0.4.8
+    VERSION 0.4.9
     LANGUAGES CXX
 )
 
@@ -77,10 +77,39 @@ if(STRPM_BUILD_STR180_BRIDGE_PROBE)
     # STR 1.8.0 unpacks/remaps private runtime regions while Skyrim is starting.
     # Never scan those mappings in-place. For MSVC builds, generate a resolver
     # variant that snapshots memory through ReadProcessMemory in bounded chunks
-    # and parses only local bytes. This avoids both startup AVs and the v0.4.6
-    # pathological cost of calling ReadProcessMemory for every 35-byte compare.
+    # and parses only local bytes.
     if(MSVC)
         file(READ "${STRPM_BRIDGE_SOURCE}" STRPM_BRIDGE_SOURCE_TEXT)
+
+        # The official v1.8.0 OverlayClient source logs the chat anchor with a
+        # wide literal (L"..."). v0.4.8 incorrectly searched the narrow ASCII
+        # bytes, which can never match the public runtime. Generate the probe with
+        # the exact UTF-16 anchor and exclude the wchar_t terminator correctly.
+        set(STRPM_NARROW_CHAT_ANCHOR [=[    constexpr char kSendChatAnchor[] = "Send chat message of type {}: '{}' ";]=])
+        set(STRPM_WIDE_CHAT_ANCHOR [=[    constexpr wchar_t kSendChatAnchor[] = L"Send chat message of type {}: '{}' ";]=])
+        string(FIND "${STRPM_BRIDGE_SOURCE_TEXT}" "${STRPM_NARROW_CHAT_ANCHOR}" STRPM_CHAT_ANCHOR_DECL_POS)
+        if(STRPM_CHAT_ANCHOR_DECL_POS EQUAL -1)
+            message(FATAL_ERROR "Unable to locate narrow STR chat anchor declaration")
+        endif()
+        string(REPLACE
+            "${STRPM_NARROW_CHAT_ANCHOR}"
+            "${STRPM_WIDE_CHAT_ANCHOR}"
+            STRPM_BRIDGE_SOURCE_TEXT
+            "${STRPM_BRIDGE_SOURCE_TEXT}"
+        )
+
+        set(STRPM_NARROW_NEEDLE_SIZE "        constexpr std::size_t needleSize = sizeof(kSendChatAnchor) - 1;")
+        set(STRPM_WIDE_NEEDLE_SIZE "        constexpr std::size_t needleSize = sizeof(kSendChatAnchor) - sizeof(kSendChatAnchor[0]);")
+        string(FIND "${STRPM_BRIDGE_SOURCE_TEXT}" "${STRPM_NARROW_NEEDLE_SIZE}" STRPM_NEEDLE_SIZE_POS)
+        if(STRPM_NEEDLE_SIZE_POS EQUAL -1)
+            message(FATAL_ERROR "Unable to locate STR chat anchor needle size")
+        endif()
+        string(REPLACE
+            "${STRPM_NARROW_NEEDLE_SIZE}"
+            "${STRPM_WIDE_NEEDLE_SIZE}"
+            STRPM_BRIDGE_SOURCE_TEXT
+            "${STRPM_BRIDGE_SOURCE_TEXT}"
+        )
 
         set(STRPM_FIND_ANCHOR_MARKER "    void FindAnchorCopies()")
         string(FIND "${STRPM_BRIDGE_SOURCE_TEXT}" "${STRPM_FIND_ANCHOR_MARKER}" STRPM_FIND_ANCHOR_MARKER_POS)
@@ -153,7 +182,7 @@ if(STRPM_BUILD_STR180_BRIDGE_PROBE)
         )
 
         # FindAnchorCopies: scan readable spans in 1 MiB chunks with enough
-        # overlap to catch an anchor crossing a chunk boundary.
+        # overlap to catch the UTF-16 anchor crossing a chunk boundary.
         set(STRPM_ANCHOR_DIRECT_READ "            const auto* bytes = reinterpret_cast<const std::uint8_t*>(span.base);\n            for (std::size_t i = 0; i + needleSize <= span.size; ++i)\n            {\n                if (std::memcmp(bytes + i, needle, needleSize) == 0)\n                    g_anchorAddresses.push_back(span.base + i);\n            }")
         set(STRPM_ANCHOR_SNAPSHOT_READ [=[            constexpr std::size_t kChunkBytes = 1u * 1024u * 1024u;
             constexpr std::size_t kOverlapBytes = needleSize - 1;
@@ -267,10 +296,8 @@ if(STRPM_BUILD_STR180_BRIDGE_PROBE)
             "${STRPM_BRIDGE_SOURCE_TEXT}"
         )
 
-        # v0.4.8 diagnostic-only instrumentation. Keep the resolver itself
-        # unchanged, but dump its accumulated state on the first failed pass and
-        # about every five seconds afterwards. That captures both pre-F2 startup
-        # state and the mapped runtime state after the player connects.
+        # Retain the v0.4.8 periodic diagnostic snapshots so the next runtime test
+        # shows whether the UTF-16 anchor proceeds through xrefs/call candidates.
         set(STRPM_BOOTSTRAP_DIAG_VAR_MARKER "        bool loggedReceiveFailure = false;")
         string(FIND "${STRPM_BRIDGE_SOURCE_TEXT}" "${STRPM_BOOTSTRAP_DIAG_VAR_MARKER}" STRPM_BOOTSTRAP_DIAG_VAR_POS)
         if(STRPM_BOOTSTRAP_DIAG_VAR_POS EQUAL -1)
