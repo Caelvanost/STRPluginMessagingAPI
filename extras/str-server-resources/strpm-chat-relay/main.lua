@@ -149,10 +149,12 @@ addEventHandler("onChatMessage", function(entityId, message)
   end
 
   local senderConnectionId = player:GetConnectionId()
+  local senderPlayerId = player:GetId()
   local flags = tonumber(fields["flags"]) or 0
   local relayEnvelope =
     message ..
     "|sender=" .. tostring(senderConnectionId) ..
+    "|senderPlayerId=" .. tostring(senderPlayerId) ..
     "|senderName=" .. safeField(player:GetUsername()) ..
     "|serverTick=" .. tostring(gameServer:GetTick())
 
@@ -161,4 +163,4 @@ addEventHandler("onChatMessage", function(entityId, message)
   end
 end)
 
-print("[STRPM] Chat relay v2 loaded")
+print("[STRPM] Chat relay v3 loaded (ProxyResolver identity metadata enabled)")
