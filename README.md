@@ -2,7 +2,7 @@
 
 Shared messaging broker for Skyrim Together Reborn compatibility mods.
 
-Current development version: **v0.4.9**.
+Current development version: **v0.5.0**.
 
 The project provides one common API for SKSE mods that need to exchange small,
 namespaced messages between Skyrim Together players. The current implementation
@@ -86,9 +86,15 @@ Client mods never need to know STR internal addresses.
 
 ## Current Status
 
-The project is now at the **first native STR 1.8.0 send/receive prototype**.
-It compiles with MSVC / Visual Studio 2026 and still requires in-game two-client
-validation before it should be treated as production-ready.
+The project is now at the **first end-to-end STR transport validation stage**.
+The native STR 1.8.0 resolver has been validated in game through:
+
+- exact UTF-16 `OverlayClient::ProcessChatMessage` anchor discovery;
+- unique RIP xref and function-bound resolution;
+- unique `TransportService::Send` detection through the `Buffer(1 << 16)` heuristic;
+- temporary breakpoint capture of the live `TransportService*`;
+- RTTI resolution and breakpoint arming for `NotifyChatMessageBroadcast::DeserializeRaw`;
+- successful bridge-ready state after a real STR chat message.
 
 Implemented:
 
@@ -111,26 +117,15 @@ Implemented:
 - lazy bootstrap so the bridge can load before the player connects through F2;
 - receive RTTI resolution remains deferred until the send resolver has positively
   identified the mapped STR 1.8.0 runtime;
-- v0.4.7 chunked snapshot resolver: candidate memory is copied through
-  `ReadProcessMemory` in bounded 1 MiB chunks and then scanned only from local
-  buffers, avoiding both startup AVs and the per-comparison RPM cost of v0.4.6;
-- explicit resolver-pass timing diagnostics so a slow or failed scan is visible
-  in `STRPluginMessagingBridge.log`;
-- v0.4.8 diagnostic snapshots on failed resolver passes: memory-span, anchor,
-  RIP-xref, ProcessChatMessage and direct-CALL state is logged on the first
-  failure and roughly every five seconds afterwards, allowing pre- and post-F2
-  runtime states to be compared without changing resolver behavior;
-- v0.4.9 exact STR 1.8.0 chat-anchor encoding: the official
-  `OverlayClient::ProcessChatMessage` source uses a wide literal
-  `L"Send chat message of type {}: '{}' "`, so the runtime resolver now scans
-  for the corresponding UTF-16 bytes instead of the incorrect narrow ASCII
-  representation used through v0.4.8;
-- fail-safe behavior when runtime resolution is incomplete;
+- chunked `ReadProcessMemory` snapshots for safe runtime scanning;
+- exact UTF-16 STR 1.8.0 chat anchor;
+- resolver timing and failure diagnostics;
+- **v0.5.0 external public-API diagnostic client** for two-player E2E testing;
 - Windows CI build validation and DLL artifact generation.
 
 Still to validate or complete:
 
-- real Player1 -> Player2 and Player2 -> Player1 runtime tests;
+- real Player1 -> Player2 and Player2 -> Player1 STRPM payload delivery;
 - suppressing relayed `STRPM|v2|...` envelopes from the visible STR chat UI
   (the receive prototype currently consumes them for STRPM but still lets STR
   continue its normal chat processing);
@@ -141,6 +136,43 @@ Still to validate or complete:
 Until the native runtime has been resolved and captured, `send()` returns
 `kNotConnected`. Unsupported/ambiguous builds fail closed rather than calling an
 uncertain address.
+
+## v0.5.0 End-to-End Diagnostic Client
+
+`STRPluginMessagingDiagnostic.dll` is a temporary SKSE plugin included in the
+v0.5.0 package. It deliberately behaves like an external consumer mod instead
+of calling private broker/bridge internals.
+
+At startup it:
+
+1. loads `STRPluginMessagingAPI.dll` through the public client helper;
+2. registers channel `strpm.test` through `registerChannel()`;
+3. retries `send()` while the native STR bridge reports `kNotConnected`;
+4. after the local player sends one ordinary STR chat message and the bridge
+   captures `TransportService*`, sends two probes five seconds apart;
+5. targets `kAllPlayers` with `Reliable | Ordered | AllowLoopback`;
+6. logs every callback received from the public API, including sender ID/name,
+   sequence, flags and payload.
+
+The probe payload format is:
+
+```text
+STRPM_E2E_V1|probe=<1|2>|pc=<computer>|pid=<process>
+```
+
+The diagnostic log is written to:
+
+```text
+Documents/My Games/Skyrim Special Edition/SKSE/STRPluginMessagingDiagnostic.log
+```
+
+For a two-client validation, install the same v0.5.0 package on both PCs, connect
+both players to the same STR server, then send one ordinary STR chat message on
+each client. Each diagnostic log should eventually contain two local loopback
+receives and two receives from the other client.
+
+`STRPluginMessagingDiagnostic.dll` is a validation aid and should be removed or
+disabled after the E2E transport test is complete.
 
 ## STR 1.8.0 Compatibility Target
 
@@ -204,7 +236,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\build-vortex.ps1
 The generated archive is written to:
 
 ```text
-dist/STRPluginMessagingAPI-v0.4.9-Vortex.zip
+dist/STRPluginMessagingAPI-v0.5.0-Vortex.zip
 ```
 
 `dist/` is ignored by Git.
@@ -215,11 +247,13 @@ dist/STRPluginMessagingAPI-v0.4.9-Vortex.zip
 Data/SKSE/Plugins/STRPluginMessagingAPI.dll
 Data/SKSE/Plugins/STRPluginMessagingAPI.ini
 Data/SKSE/Plugins/STRPluginMessagingBridge.dll
+Data/SKSE/Plugins/STRPluginMessagingDiagnostic.dll
 ```
 
-Both DLLs are valid SKSE plugins. The broker resolves the bridge by module name
-relative to its own directory, so startup does not depend on the SKSE plugin
-load order or on the process current working directory.
+All three DLLs are valid SKSE plugins in the v0.5.0 validation package. The
+broker resolves the bridge by module name relative to its own directory, so
+startup does not depend on the SKSE plugin load order or on the process current
+working directory.
 
 The default INI points to:
 
@@ -255,6 +289,15 @@ receive RTTI resolver starts
         |
         v
 NotifyChatMessageBroadcast receive hook armed
+        |
+        v
+player sends one ordinary STR chat message
+        |
+        v
+live TransportService* captured
+        |
+        v
+STRPM bridge ready
 ```
 
 The receive resolver is deliberately not allowed to scan before the send
@@ -265,14 +308,10 @@ that chunk is skipped and the bootstrap retries later. Comparisons inside a
 snapshot are ordinary local-memory comparisons and do not call
 `ReadProcessMemory` again.
 
-Failed passes retain the v0.4.8 diagnostic snapshots on the first failure and
-then about every five seconds. This makes the next runtime test show whether the
-correct UTF-16 anchor proceeds through the RIP-xref and call-candidate stages.
-
 ## Repository Layout
 
 - `include/STRPluginMessagingAPI/` — stable public API for mod authors.
-- `src/` — broker runtime and STR 1.8.0 bridge implementation.
+- `src/` — broker runtime, STR bridge and diagnostic client.
 - `package/` — default Vortex install files.
 - `examples/` — minimal API usage example.
 - `docs/` — migration, transport design, binary and RTTI research.
