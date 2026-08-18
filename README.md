@@ -2,7 +2,7 @@
 
 Shared messaging broker for Skyrim Together Reborn compatibility mods.
 
-Current development version: **v0.4.8**.
+Current development version: **v0.4.9**.
 
 The project provides one common API for SKSE mods that need to exchange small,
 namespaced messages between Skyrim Together players. The current implementation
@@ -120,6 +120,11 @@ Implemented:
   RIP-xref, ProcessChatMessage and direct-CALL state is logged on the first
   failure and roughly every five seconds afterwards, allowing pre- and post-F2
   runtime states to be compared without changing resolver behavior;
+- v0.4.9 exact STR 1.8.0 chat-anchor encoding: the official
+  `OverlayClient::ProcessChatMessage` source uses a wide literal
+  `L"Send chat message of type {}: '{}' "`, so the runtime resolver now scans
+  for the corresponding UTF-16 bytes instead of the incorrect narrow ASCII
+  representation used through v0.4.8;
 - fail-safe behavior when runtime resolution is incomplete;
 - Windows CI build validation and DLL artifact generation.
 
@@ -199,7 +204,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\build-vortex.ps1
 The generated archive is written to:
 
 ```text
-dist/STRPluginMessagingAPI-v0.4.8-Vortex.zip
+dist/STRPluginMessagingAPI-v0.4.9-Vortex.zip
 ```
 
 `dist/` is ignored by Git.
@@ -235,7 +240,10 @@ retries periodically and follows this order:
 SKSE loads STRPM
         |
         v
-send resolver snapshots candidate STR memory in 1 MiB chunks
+scan exact UTF-16 STR chat anchor in 1 MiB snapshots
+        |
+        v
+resolve ProcessChatMessage RIP xref
         |
         v
 TransportService::Send resolved
@@ -257,10 +265,9 @@ that chunk is skipped and the bootstrap retries later. Comparisons inside a
 snapshot are ordinary local-memory comparisons and do not call
 `ReadProcessMemory` again.
 
-When resolution fails, v0.4.8 logs the accumulated resolver state on the first
-failed pass and then about every five seconds. This is intentionally diagnostic
-only: it does not alter the signature search, candidate filtering, breakpoint
-arming, receive resolver or transport behavior.
+Failed passes retain the v0.4.8 diagnostic snapshots on the first failure and
+then about every five seconds. This makes the next runtime test show whether the
+correct UTF-16 anchor proceeds through the RIP-xref and call-candidate stages.
 
 ## Repository Layout
 
