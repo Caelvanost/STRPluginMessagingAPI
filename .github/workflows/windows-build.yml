@@ -27,7 +27,8 @@ jobs:
         run: |
           $required = @(
             "build/Release/STRPluginMessagingAPI.dll",
-            "build/Release/STRPluginMessagingBridge.dll"
+            "build/Release/STRPluginMessagingBridge.dll",
+            "build/Release/STRPluginMessagingDiagnostic.dll"
           )
           foreach ($path in $required) {
             if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
@@ -42,8 +43,9 @@ jobs:
           New-Item -ItemType Directory -Force -Path $stage | Out-Null
           Copy-Item "build/Release/STRPluginMessagingAPI.dll" "$stage/STRPluginMessagingAPI.dll"
           Copy-Item "build/Release/STRPluginMessagingBridge.dll" "$stage/STRPluginMessagingBridge.dll"
+          Copy-Item "build/Release/STRPluginMessagingDiagnostic.dll" "$stage/STRPluginMessagingDiagnostic.dll"
           Copy-Item "package/Data/SKSE/Plugins/STRPluginMessagingAPI.ini" "$stage/STRPluginMessagingAPI.ini"
-          Compress-Archive -Path "artifact-vortex/*" -DestinationPath "STRPluginMessagingAPI-v0.4.9-test-Vortex.zip" -Force
+          Compress-Archive -Path "artifact-vortex/*" -DestinationPath "STRPluginMessagingAPI-v0.5.0-test-Vortex.zip" -Force
 
       - name: Upload DLLs
         uses: actions/upload-artifact@v4
@@ -52,9 +54,10 @@ jobs:
           path: |
             build/Release/STRPluginMessagingAPI.dll
             build/Release/STRPluginMessagingBridge.dll
+            build/Release/STRPluginMessagingDiagnostic.dll
 
       - name: Upload Vortex package
         uses: actions/upload-artifact@v4
         with:
-          name: STRPluginMessagingAPI-v0.4.9-test-Vortex
-          path: STRPluginMessagingAPI-v0.4.9-test-Vortex.zip
+          name: STRPluginMessagingAPI-v0.5.0-test-Vortex
+          path: STRPluginMessagingAPI-v0.5.0-test-Vortex.zip
