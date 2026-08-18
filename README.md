@@ -59,9 +59,9 @@ Validated:
 v0.6.0 adds **STRPM chat UI suppression**.
 
 The validated transport and receive path are left unchanged. A separate bridge
-helper dynamically resolves candidate client functions referencing the CEF
-`"message"` event and identifies `OverlayService::OnChatMessageReceived` at
-runtime. When the callback receives a `NotifyChatMessageBroadcast` whose
+helper dynamically resolves candidate client functions referencing the exact CEF
+`"message\0"` event literal and identifies `OverlayService::OnChatMessageReceived`
+at runtime. When the callback receives a `NotifyChatMessageBroadcast` whose
 `ChatMessage` begins with `STRPM|v2|`, the helper returns before STR calls
 `ExecuteAsync("message", ...)`.
 
@@ -76,8 +76,9 @@ The filter relies on the official STR/TiltedCore MSVC x64 ABI:
   offset `0x48` for the official STR 1.8.0 build.
 
 The helper first excludes the bridge DLL's own copy of the STR runtime anchor,
-then resolves only the external mapped STR allocation. Unsupported or ambiguous
-runtime layouts fail closed and leave normal chat behavior unchanged.
+then resolves only the external mapped STR allocation. Candidate functions are
+not silently truncated: an unexpectedly broad candidate set fails closed and
+leaves normal chat behavior unchanged.
 
 ## Public API
 
@@ -145,7 +146,7 @@ cmake -S . -B build
 cmake --build build --config Release
 ```
 
-Vortex package:
+Normal Vortex package:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File .\build-vortex.ps1
@@ -157,7 +158,22 @@ Output:
 dist/STRPluginMessagingAPI-v0.6.0-Vortex.zip
 ```
 
+For E2E/UI-suppression regression testing, temporarily include the diagnostic
+consumer:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\build-vortex.ps1 -IncludeDiagnostic
+```
+
+Test output:
+
+```text
+dist/STRPluginMessagingAPI-v0.6.0-test-Vortex.zip
+```
+
 ## v0.6.0 Vortex Layout
+
+Normal package:
 
 ```text
 Data/SKSE/Plugins/STRPluginMessagingAPI.dll
@@ -165,8 +181,14 @@ Data/SKSE/Plugins/STRPluginMessagingAPI.ini
 Data/SKSE/Plugins/STRPluginMessagingBridge.dll
 ```
 
-`STRPluginMessagingDiagnostic.dll` remains in the source/build graph as a
-regression-test client but is **not packaged** in v0.6.0.
+The `-IncludeDiagnostic` test package additionally installs:
+
+```text
+Data/SKSE/Plugins/STRPluginMessagingDiagnostic.dll
+```
+
+The diagnostic client remains in the source/build graph as a regression target
+but is not included in the normal v0.6.0 package.
 
 ## Expected Runtime Logs
 
@@ -196,6 +218,11 @@ STRPM chat UI filter identified OverlayService::OnChatMessageReceived = ...
 
 The final identification line is expected only after the first received STRPM
 envelope reaches the STR overlay callback.
+
+With the `-IncludeDiagnostic` test package, the diagnostic logs should still
+reach `E2E BIDIRECTIONAL HANDSHAKE COMPLETE`, while the yellow technical
+`STRPM|v2|...` chat entries should no longer appear. Ordinary user chat must
+remain visible normally.
 
 ## Remaining Work
 
