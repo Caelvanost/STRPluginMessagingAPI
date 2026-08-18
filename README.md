@@ -2,7 +2,7 @@
 
 Shared messaging broker for Skyrim Together Reborn compatibility mods.
 
-Current development version: **v0.6.2**.
+Current development version: **v0.6.3**.
 
 STRPluginMessagingAPI gives SKSE mods one common messaging layer over the
 **official Skyrim Together Reborn 1.8.0 connection**. It is intended for mods
@@ -54,33 +54,59 @@ Validated:
 - public API channel registration and callback delivery;
 - automatic bidirectional E2E handshake in the diagnostic client.
 
+### v0.6.3
+
+v0.6.3 replaces the unsuccessful `OverlayService::OnChatMessageReceived`
+candidate-breakpoint experiment with a single lower-level UI filter at
+`TiltedPhoques::OverlayApp::ExecuteAsync`.
+
+The v0.6.2 two-client test completed the full E2E handshake on both clients and
+showed the STRPM envelopes in yellow, but all three candidate callbacks remained
+unhit. This indicates that the release optimizer/inlining shape of the public
+1.8.0 binary does not execute those standalone function entries even though the
+source-level callbacks exist.
+
+The official STR 1.8.0 source routes chat through:
+
+```text
+NotifyChatMessageBroadcast::DeserializeRaw
+        ↓
+STR event dispatch
+        ↓
+OverlayService::OnChatMessageReceived
+        ↓
+OverlayApp::ExecuteAsync("message", arguments)
+        ↓
+CEF / Angular chat UI
+```
+
+The new filter therefore:
+
+- leaves the validated receiver implementation unchanged;
+- resolves the exact CEF `"message\0"` literal inside the mapped STR allocation;
+- follows its source-level callers to the common direct-call target used by
+  `SendSystemMessage`, `OnChatMessageReceived` and `OnPlayerDialogue`;
+- requires at least two independent `"message"` xrefs to converge on the same
+  executable target before identifying it as `OverlayApp::ExecuteAsync`;
+- waits until the validated receive VEH is armed, then registers the UI observer
+  in front of it;
+- observes the raw `DeserializeRaw` breakpoint read-only and marks only packets
+  whose decoded `ChatMessage` starts with `STRPM|v2|`;
+- suppresses the next same-thread `ExecuteAsync("message", ...)` by emulating the
+  void return before the event reaches CEF;
+- leaves every other `ExecuteAsync` event and all ordinary STR chat untouched;
+- expires stale markers after five seconds and logs the first few raw-envelope,
+  `ExecuteAsync("message")` and suppression events for diagnosis.
+
 ### v0.6.2
 
-v0.6.2 changes only the **STRPM chat UI suppression probe**. The validated send,
-receive and server-relay transport paths are intentionally left unchanged.
+v0.6.2 changed only the **STRPM chat UI suppression probe**. The validated send,
+receive and server-relay transport paths were intentionally left unchanged.
 
-The v0.6.1 two-client test showed that the bridge resolved three overlay
-candidates and completed the full bidirectional E2E handshake, but none of the
-candidate breakpoints identified itself as `OverlayService::OnChatMessageReceived`.
-The previous detector assumed an exact in-memory layout for
-`TiltedPhoques::String` and a fixed `ChatMessage` member offset.
-
-v0.6.2 removes those assumptions. At each candidate breakpoint it now:
-
-- treats `RDX` as the `NotifyChatMessageBroadcast&` argument, matching the
-  official STR 1.8.0 `OverlayService::OnChatMessageReceived` signature;
-- snapshots only the first `0x100` bytes of the message object with
-  `ReadProcessMemory`;
-- searches the local snapshot for inline/SSO `STRPM|v2|` bytes;
-- inspects aligned pointer-sized fields and safely follows them for a heap-backed
-  string beginning with the exact reserved prefix;
-- fails closed if any read is invalid;
-- logs the first few hits of every candidate with its address, `RDX` value and
-  whether the envelope prefix was detected.
-
-This makes callback identification independent of the private allocator/string
-layout while retaining the exact `STRPM|v2|` filter condition. Ordinary STR chat
-continues through the original code path.
+It removed the fixed TiltedPhoques string-layout assumption and probed candidate
+`OverlayService` callbacks using bounded `ReadProcessMemory` snapshots. Two-client
+runtime testing then showed that the three candidates were armed but never hit,
+which is why v0.6.3 moves the interception point to `OverlayApp::ExecuteAsync`.
 
 ### v0.6.1
 
@@ -110,16 +136,10 @@ The transport wire format and public API are unchanged.
 
 v0.6.0 introduced **STRPM chat UI suppression**.
 
-A separate bridge helper dynamically resolves candidate client functions
-referencing the exact CEF `"message\0"` event literal. The initial implementation
-attempted to identify `OverlayService::OnChatMessageReceived` using a hard-coded
-MSVC/TiltedPhoques string layout. v0.6.2 supersedes that layout-specific detector
-with bounded runtime probing.
-
-The helper excludes the bridge DLL's own copy of the STR runtime anchor and
-resolves only the external mapped STR allocation. Candidate functions are not
-silently truncated: an unexpectedly broad candidate set fails closed and leaves
-normal chat behavior unchanged.
+A separate bridge helper dynamically resolved candidate client functions
+referencing the exact CEF `"message\0"` event literal. Later revisions replace
+that initial callback-entry strategy with safer runtime probing and finally the
+common `OverlayApp::ExecuteAsync` interception used by v0.6.3.
 
 ## Public API
 
@@ -196,7 +216,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\build-vortex.ps1
 Output:
 
 ```text
-dist/STRPluginMessagingAPI-v0.6.2-Vortex.zip
+dist/STRPluginMessagingAPI-v0.6.3-Vortex.zip
 ```
 
 For E2E/UI-suppression regression testing, temporarily include the diagnostic
@@ -209,10 +229,10 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\build-vortex.ps1 -IncludeD
 Test output:
 
 ```text
-dist/STRPluginMessagingAPI-v0.6.2-test-Vortex.zip
+dist/STRPluginMessagingAPI-v0.6.3-test-Vortex.zip
 ```
 
-## v0.6.2 Vortex Layout
+## v0.6.3 Vortex Layout
 
 Normal package:
 
@@ -229,7 +249,7 @@ Data/SKSE/Plugins/STRPluginMessagingDiagnostic.dll
 ```
 
 The diagnostic client remains in the source/build graph as a regression target
-but is not included in the normal v0.6.2 package.
+but is not included in the normal v0.6.3 package.
 
 ## Expected Runtime Logs
 
@@ -250,18 +270,16 @@ TransportService instance captured: ...
 STRPM bridge ready: native STR send captured and receive hook armed
 ```
 
-For v0.6.2 UI suppression, the bridge should additionally report candidate hits:
+For v0.6.3 UI suppression, the bridge should additionally report:
 
 ```text
 STRPM chat UI suppression bootstrap started
-STRPM chat UI suppression candidates armed: 3
-STRPM chat UI candidate hit index=... address=... RDX=... envelope=...
-```
-
-On successful identification, one hit should report `envelope=yes`, followed by:
-
-```text
-STRPM chat UI filter identified OverlayService::OnChatMessageReceived = ...
+STRPM chat UI OverlayApp::ExecuteAsync resolved=0x... votes=... xrefs=...
+STRPM chat UI OverlayApp::ExecuteAsync breakpoint armed: 0x...
+STRPM chat UI suppression armed at OverlayApp::ExecuteAsync
+STRPM chat UI raw envelope observed thread=... pending=...
+STRPM chat UI ExecuteAsync('message') hit thread=... pending=...
+STRPM chat UI envelope suppressed via OverlayApp::ExecuteAsync
 ```
 
 With the `-IncludeDiagnostic` test package, the diagnostic logs should still
@@ -271,7 +289,7 @@ remain visible normally.
 
 ## Remaining Work
 
-- validate v0.6.2 UI suppression on both clients;
+- validate v0.6.3 UI suppression on both clients;
 - discover/report the local STR connection ID directly;
 - finalize `Host` target semantics;
 - reduce pre-ready `send()` noise/retries;
