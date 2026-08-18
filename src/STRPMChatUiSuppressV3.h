@@ -4,6 +4,8 @@
 #include "STRPluginMessagingBridgeReceive.h"
 
 #include <limits>
+#include <optional>
+#include <string>
 #include <unordered_map>
 
 namespace STRPMChatUiSuppressV3
