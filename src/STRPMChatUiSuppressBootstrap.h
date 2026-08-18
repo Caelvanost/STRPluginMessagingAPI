@@ -1,6 +1,6 @@
 #pragma once
 
-#include "STRPMChatUiSuppress.h"
+#include "STRPMChatUiSuppressV2.h"
 
 namespace STRPMChatUiSuppressBootstrap
 {
@@ -63,7 +63,7 @@ namespace STRPMChatUiSuppressBootstrap
                 {
                     const auto candidates =
                         STRPMChatUiSuppress::detail::ResolveCandidateFunctions(allocationBase);
-                    if (STRPMChatUiSuppress::detail::ArmCandidates(candidates))
+                    if (STRPMChatUiSuppressV2::ArmCandidates(candidates))
                     {
                         FILE* file = nullptr;
                         fopen_s(
@@ -75,7 +75,7 @@ namespace STRPMChatUiSuppressBootstrap
                             std::fprintf(
                                 file,
                                 "STRPM chat UI suppression candidates armed: %zu\n",
-                                STRPMChatUiSuppress::detail::g_candidates.size());
+                                STRPMChatUiSuppressV2::CandidateCount());
                             std::fclose(file);
                         }
                         return 0;
