@@ -1,14 +1,17 @@
 #include "SKSEPluginVersionCompat.h"
 
+#include <cstdarg>
 #include <cstdint>
 #include <cstdio>
+
+#include "STRPMProxyResolverBridge.h"
 
 struct SKSEInterface;
 
 extern "C" __declspec(dllexport) STRPMSKSE::PluginVersionData SKSEPlugin_Version =
 {
     STRPMSKSE::PluginVersionData::kVersion,
-    STRPMSKSE::kPluginVersion_0_7_0,
+    STRPMSKSE::kPluginVersion_0_8_0,
     "STRPluginMessagingBridge",
     "Caelvanost",
     "",
@@ -24,13 +27,15 @@ extern "C" __declspec(dllexport) bool SKSEPlugin_Load(const SKSEInterface*)
     fopen_s(&file, "Data\\SKSE\\Plugins\\STRPluginMessagingBridge.log", "a");
     if (file != nullptr)
     {
-        std::fprintf(file, "STRPluginMessagingBridge v0.7.0: SKSEPlugin_Load entered\n");
+        std::fprintf(file, "STRPluginMessagingBridge v0.8.0: SKSEPlugin_Load entered\n");
         std::fclose(file);
     }
 
-    // v0.7.0 suppresses reserved STRPM chat packets in the validated receive
-    // path at TransportService::OnConsume, before STR creates and dispatches a
-    // NotifyChatMessageBroadcast. No separate overlay/UI hook is required.
+    // Keep the validated v0.7.0 transport/suppression path unchanged. The
+    // v0.8.0 ProxyResolver is isolated here and observes canonical STR player
+    // lifecycle data without scanning Skyrim ProcessLists or guessing actors.
+    STRPMProxyResolverBridge::Start();
+
     // Transport hooks are initialized later by STRPluginMessagingAPI through
     // STRPM_QueryTransportInterface.
     return true;
