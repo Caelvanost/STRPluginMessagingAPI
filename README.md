@@ -2,7 +2,7 @@
 
 Shared messaging broker for Skyrim Together Reborn compatibility mods.
 
-Current development version: **v0.5.0**.
+Current development version: **v0.5.1**.
 
 The project provides one common API for SKSE mods that need to exchange small,
 namespaced messages between Skyrim Together players. The current implementation
@@ -86,7 +86,7 @@ Client mods never need to know STR internal addresses.
 
 ## Current Status
 
-The project is now at the **first end-to-end STR transport validation stage**.
+The project is at the **two-client end-to-end STR transport validation stage**.
 The native STR 1.8.0 resolver has been validated in game through:
 
 - exact UTF-16 `OverlayClient::ProcessChatMessage` anchor discovery;
@@ -95,6 +95,12 @@ The native STR 1.8.0 resolver has been validated in game through:
 - temporary breakpoint capture of the live `TransportService*`;
 - RTTI resolution and breakpoint arming for `NotifyChatMessageBroadcast::DeserializeRaw`;
 - successful bridge-ready state after a real STR chat message.
+
+The first v0.5.0 two-client run also validated real server-relayed payloads:
+Player1 received both of its own loopback probes and both probes from Player2.
+Player2 received its own loopbacks, but Player1's initial probes had already been
+sent before Player2 became receive-ready. v0.5.1 therefore adds a peer-triggered
+ACK handshake so the test proves both directions regardless of startup timing.
 
 Implemented:
 
@@ -120,15 +126,15 @@ Implemented:
 - chunked `ReadProcessMemory` snapshots for safe runtime scanning;
 - exact UTF-16 STR 1.8.0 chat anchor;
 - resolver timing and failure diagnostics;
-- **v0.5.0 external public-API diagnostic client** for two-player E2E testing;
+- external public-API diagnostic client for two-player E2E testing;
+- v0.5.1 peer-triggered ACK handshake and reduced pre-ready retry cadence;
 - Windows CI build validation and DLL artifact generation.
 
 Still to validate or complete:
 
-- real Player1 -> Player2 and Player2 -> Player1 STRPM payload delivery;
-- suppressing relayed `STRPM|v2|...` envelopes from the visible STR chat UI
-  (the receive prototype currently consumes them for STRPM but still lets STR
-  continue its normal chat processing);
+- confirm `E2E BIDIRECTIONAL HANDSHAKE COMPLETE` on both clients;
+- suppress relayed `STRPM|v2|...` envelopes from the visible STR chat UI
+  (they currently appear as yellow technical chat lines after being decoded);
 - local STR connection-ID discovery;
 - final host-target semantics;
 - migrating the individual compatibility mods onto the shared API.
@@ -137,27 +143,36 @@ Until the native runtime has been resolved and captured, `send()` returns
 `kNotConnected`. Unsupported/ambiguous builds fail closed rather than calling an
 uncertain address.
 
-## v0.5.0 End-to-End Diagnostic Client
+## v0.5.1 End-to-End Diagnostic Client
 
 `STRPluginMessagingDiagnostic.dll` is a temporary SKSE plugin included in the
-v0.5.0 package. It deliberately behaves like an external consumer mod instead
+v0.5.1 package. It deliberately behaves like an external consumer mod instead
 of calling private broker/bridge internals.
 
 At startup it:
 
-1. loads `STRPluginMessagingAPI.dll` through the public client helper;
-2. registers channel `strpm.test` through `registerChannel()`;
-3. retries `send()` while the native STR bridge reports `kNotConnected`;
+1. waits for SKSE to load `STRPluginMessagingAPI.dll`;
+2. registers channel `strpm.test` through the public `registerChannel()` API;
+3. retries `send()` at a reduced cadence while the native STR bridge is not ready;
 4. after the local player sends one ordinary STR chat message and the bridge
    captures `TransportService*`, sends two probes five seconds apart;
 5. targets `kAllPlayers` with `Reliable | Ordered | AllowLoopback`;
 6. logs every callback received from the public API, including sender ID/name,
-   sequence, flags and payload.
+   sequence, flags and payload;
+7. when a probe from the other PC is observed, sends one automatic ACK;
+8. reports `E2E BIDIRECTIONAL HANDSHAKE COMPLETE` after both a local ACK send and
+   an ACK from the peer have been observed.
 
-The probe payload format is:
+Probe payloads use:
 
 ```text
 STRPM_E2E_V1|probe=<1|2>|pc=<computer>|pid=<process>
+```
+
+ACK payloads use:
+
+```text
+STRPM_E2E_V1|ack=1|pc=<computer>|pid=<process>
 ```
 
 The diagnostic log is written to:
@@ -166,10 +181,18 @@ The diagnostic log is written to:
 Documents/My Games/Skyrim Special Edition/SKSE/STRPluginMessagingDiagnostic.log
 ```
 
-For a two-client validation, install the same v0.5.0 package on both PCs, connect
+For a two-client validation, install the same v0.5.1 package on both PCs, connect
 both players to the same STR server, then send one ordinary STR chat message on
-each client. Each diagnostic log should eventually contain two local loopback
-receives and two receives from the other client.
+each client. Startup order no longer matters: the first peer probe seen by a
+ready client triggers an ACK, which causes the opposite direction to be tested.
+Both diagnostic logs should eventually contain:
+
+```text
+E2E PEER OBSERVED ...
+E2E ACK SEND OK ...
+E2E PEER ACK OBSERVED ...
+E2E BIDIRECTIONAL HANDSHAKE COMPLETE
+```
 
 `STRPluginMessagingDiagnostic.dll` is a validation aid and should be removed or
 disabled after the E2E transport test is complete.
@@ -236,7 +259,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\build-vortex.ps1
 The generated archive is written to:
 
 ```text
-dist/STRPluginMessagingAPI-v0.5.0-Vortex.zip
+dist/STRPluginMessagingAPI-v0.5.1-Vortex.zip
 ```
 
 `dist/` is ignored by Git.
@@ -250,7 +273,7 @@ Data/SKSE/Plugins/STRPluginMessagingBridge.dll
 Data/SKSE/Plugins/STRPluginMessagingDiagnostic.dll
 ```
 
-All three DLLs are valid SKSE plugins in the v0.5.0 validation package. The
+All three DLLs are valid SKSE plugins in the v0.5.1 validation package. The
 broker resolves the bridge by module name relative to its own directory, so
 startup does not depend on the SKSE plugin load order or on the process current
 working directory.
