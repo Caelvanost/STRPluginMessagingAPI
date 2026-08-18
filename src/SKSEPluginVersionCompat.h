@@ -24,5 +24,9 @@ namespace STRPMSKSE
     // Runtime reported by the user's SKSE 2.2.6 log:
     // 0x01064920 == SkyrimSE.exe 1.6.1170.
     inline constexpr std::uint32_t kRuntime_1_6_1170 = 0x01064920;
+
+    // Keep the v0.5.1 constant because the non-packaged diagnostic regression
+    // target still carries its original metadata while v0.6.0 ships API+bridge.
+    inline constexpr std::uint32_t kPluginVersion_0_5_1 = 0x00050001;
     inline constexpr std::uint32_t kPluginVersion_0_6_0 = 0x00060000;
 }
