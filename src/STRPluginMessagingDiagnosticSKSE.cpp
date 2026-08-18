@@ -84,12 +84,15 @@ namespace
         return payload.find(localPcField) == std::string_view::npos;
     }
 
-    void STRPM_CALL ReceiveDiagnostic(const STRPM::Message* message, void*)
+    void STRPM_CALL ReceiveDiagnostic(
+        const STRPM::Message* message,
+        void*)
     {
         if (!message)
             return;
 
-        const auto senderName = message->sender.displayName != nullptr ? message->sender.displayName : "<unknown>";
+        const auto senderName = message->sender.displayName != nullptr ?
+            message->sender.displayName : "<unknown>";
         const std::string_view payloadView(
             message->data != nullptr ? static_cast<const char*>(message->data) : "",
             message->size);
@@ -129,7 +132,9 @@ namespace
         }
     }
 
-    bool SleepInterruptible(std::stop_token token, std::chrono::milliseconds duration)
+    bool SleepInterruptible(
+        std::stop_token token,
+        std::chrono::milliseconds duration)
     {
         constexpr auto slice = std::chrono::milliseconds(100);
         auto slept = std::chrono::milliseconds(0);
@@ -148,14 +153,20 @@ namespace
         const STRPM::Target& target,
         std::string_view payload)
     {
-        return api->send(kDiagnosticChannel, target, payload.data(), payload.size(), kProbeFlags);
+        return api->send(
+            kDiagnosticChannel,
+            target,
+            payload.data(),
+            payload.size(),
+            kProbeFlags);
     }
 
     void DiagnosticWorker(std::stop_token token)
     {
         Log("diagnostic worker started; waiting for SKSE to load STRPluginMessagingAPI.dll");
 
-        while (!token.stop_requested() && GetModuleHandleW(L"STRPluginMessagingAPI.dll") == nullptr)
+        while (!token.stop_requested() &&
+               GetModuleHandleW(L"STRPluginMessagingAPI.dll") == nullptr)
         {
             if (!SleepInterruptible(token, kApiRetryDelay))
                 return;
@@ -177,10 +188,17 @@ namespace
         Log("public API v%u loaded", api->version);
         g_computerName = GetDiagnosticComputerName();
 
-        const auto registerResult = api->registerChannel(kDiagnosticChannel, &ReceiveDiagnostic, nullptr, &g_listener);
+        const auto registerResult = api->registerChannel(
+            kDiagnosticChannel,
+            &ReceiveDiagnostic,
+            nullptr,
+            &g_listener);
         if (registerResult != STRPM::Result::kOk)
         {
-            Log("failed to register channel '%s': %s", kDiagnosticChannel, STRPM::ResultToString(registerResult));
+            Log(
+                "failed to register channel '%s': %s",
+                kDiagnosticChannel,
+                STRPM::ResultToString(registerResult));
             return;
         }
         Log("registered public callback on channel '%s' for pc='%s'", kDiagnosticChannel, g_computerName.c_str());
@@ -213,7 +231,8 @@ namespace
             }
 
             const auto now = std::chrono::steady_clock::now();
-            if (lastWaitingLog.time_since_epoch().count() == 0 || now - lastWaitingLog >= kSendRetryLogInterval)
+            if (lastWaitingLog.time_since_epoch().count() == 0 ||
+                now - lastWaitingLog >= kSendRetryLogInterval)
             {
                 Log(
                     "E2E send waiting: %s (connect with F2, then send one normal STR chat message on this client)",
@@ -249,7 +268,8 @@ namespace
                 else
                 {
                     const auto now = std::chrono::steady_clock::now();
-                    if (lastAckWaitingLog.time_since_epoch().count() == 0 || now - lastAckWaitingLog >= kSendRetryLogInterval)
+                    if (lastAckWaitingLog.time_since_epoch().count() == 0 ||
+                        now - lastAckWaitingLog >= kSendRetryLogInterval)
                     {
                         Log("E2E ACK waiting: %s", STRPM::ResultToString(result));
                         lastAckWaitingLog = now;
