@@ -28,24 +28,60 @@ jobs:
           $required = @(
             "build/Release/STRPluginMessagingAPI.dll",
             "build/Release/STRPluginMessagingBridge.dll",
-            "build/Release/STRPluginMessagingDiagnostic.dll"
+            "build/Release/STRPluginMessagingDiagnostic.dll",
+            "package/fomod/info.xml",
+            "package/fomod/ModuleConfig.xml",
+            "extras/str-server-resources/strpm-chat-relay/main.lua",
+            "extras/str-server-resources/strpm-chat-relay/strpm-chat-relay.manifest"
           )
           foreach ($path in $required) {
             if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
-              throw "Missing build output: $path"
+              throw "Missing build/package input: $path"
             }
           }
+          [xml](Get-Content -LiteralPath "package/fomod/info.xml" -Raw) | Out-Null
+          [xml](Get-Content -LiteralPath "package/fomod/ModuleConfig.xml" -Raw) | Out-Null
 
-      - name: Package Vortex test archive
+      - name: Package Vortex FOMOD test archive
         shell: pwsh
         run: |
-          $stage = "artifact-vortex/Data/SKSE/Plugins"
-          New-Item -ItemType Directory -Force -Path $stage | Out-Null
-          Copy-Item "build/Release/STRPluginMessagingAPI.dll" "$stage/STRPluginMessagingAPI.dll"
-          Copy-Item "build/Release/STRPluginMessagingBridge.dll" "$stage/STRPluginMessagingBridge.dll"
-          Copy-Item "build/Release/STRPluginMessagingDiagnostic.dll" "$stage/STRPluginMessagingDiagnostic.dll"
-          Copy-Item "package/Data/SKSE/Plugins/STRPluginMessagingAPI.ini" "$stage/STRPluginMessagingAPI.ini"
-          Compress-Archive -Path "artifact-vortex/*" -DestinationPath "STRPluginMessagingAPI-v0.8.0-test-Vortex.zip" -Force
+          $root = "artifact-vortex"
+          $pluginDir = "$root/Data/SKSE/Plugins"
+          $serverResources = "$root/Server/SkyrimTogetherReborn/resources"
+          New-Item -ItemType Directory -Force -Path $pluginDir | Out-Null
+          New-Item -ItemType Directory -Force -Path $serverResources | Out-Null
+
+          Copy-Item "package/fomod" "$root/fomod" -Recurse -Force
+          Copy-Item "build/Release/STRPluginMessagingAPI.dll" "$pluginDir/STRPluginMessagingAPI.dll"
+          Copy-Item "build/Release/STRPluginMessagingBridge.dll" "$pluginDir/STRPluginMessagingBridge.dll"
+          Copy-Item "build/Release/STRPluginMessagingDiagnostic.dll" "$pluginDir/STRPluginMessagingDiagnostic.dll"
+          Copy-Item "package/Data/SKSE/Plugins/STRPluginMessagingAPI.ini" "$pluginDir/STRPluginMessagingAPI.ini"
+          Copy-Item "extras/str-server-resources/strpm-chat-relay" $serverResources -Recurse -Force
+
+          Compress-Archive -Path "$root/*" -DestinationPath "STRPluginMessagingAPI-v0.8.1-test-Vortex.zip" -Force
+
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          $archive = [System.IO.Compression.ZipFile]::OpenRead("STRPluginMessagingAPI-v0.8.1-test-Vortex.zip")
+          try {
+            $entries = @($archive.Entries | ForEach-Object { $_.FullName.Replace('\', '/') })
+            $required = @(
+              "fomod/info.xml",
+              "fomod/ModuleConfig.xml",
+              "Data/SKSE/Plugins/STRPluginMessagingAPI.dll",
+              "Data/SKSE/Plugins/STRPluginMessagingBridge.dll",
+              "Data/SKSE/Plugins/STRPluginMessagingDiagnostic.dll",
+              "Data/SKSE/Plugins/STRPluginMessagingAPI.ini",
+              "Server/SkyrimTogetherReborn/resources/strpm-chat-relay/main.lua",
+              "Server/SkyrimTogetherReborn/resources/strpm-chat-relay/strpm-chat-relay.manifest"
+            )
+            foreach ($entry in $required) {
+              if ($entries -notcontains $entry) {
+                throw "Missing archive entry: $entry"
+              }
+            }
+          } finally {
+            $archive.Dispose()
+          }
 
       - name: Upload DLLs
         uses: actions/upload-artifact@v4
@@ -59,5 +95,5 @@ jobs:
       - name: Upload Vortex package
         uses: actions/upload-artifact@v4
         with:
-          name: STRPluginMessagingAPI-v0.8.0-test-Vortex
-          path: STRPluginMessagingAPI-v0.8.0-test-Vortex.zip
+          name: STRPluginMessagingAPI-v0.8.1-test-Vortex
+          path: STRPluginMessagingAPI-v0.8.1-test-Vortex.zip
