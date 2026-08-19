@@ -2,7 +2,7 @@
 <fomod>
   <Name>STR Plugin Messaging API</Name>
   <Author>Caelvanost</Author>
-  <Version MachineVersion="0.8.1">0.8.1</Version>
+  <Version MachineVersion="0.8.2">0.8.2</Version>
   <Website>https://github.com/Caelvanost/STRPluginMessagingAPI</Website>
   <Description>Shared Skyrim Together Reborn messaging and player proxy resolution for SKSE compatibility mods.</Description>
 </fomod>
