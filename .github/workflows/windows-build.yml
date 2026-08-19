@@ -58,10 +58,10 @@ jobs:
           Copy-Item "package/Data/SKSE/Plugins/STRPluginMessagingAPI.ini" "$pluginDir/STRPluginMessagingAPI.ini"
           Copy-Item "extras/str-server-resources/strpm-chat-relay" $serverResources -Recurse -Force
 
-          Compress-Archive -Path "$root/*" -DestinationPath "STRPluginMessagingAPI-v0.8.1-test-Vortex.zip" -Force
+          Compress-Archive -Path "$root/*" -DestinationPath "STRPluginMessagingAPI-v0.8.2-test-Vortex.zip" -Force
 
           Add-Type -AssemblyName System.IO.Compression.FileSystem
-          $archive = [System.IO.Compression.ZipFile]::OpenRead("STRPluginMessagingAPI-v0.8.1-test-Vortex.zip")
+          $archive = [System.IO.Compression.ZipFile]::OpenRead("STRPluginMessagingAPI-v0.8.2-test-Vortex.zip")
           try {
             $entries = @($archive.Entries | ForEach-Object { $_.FullName.Replace('\', '/') })
             $required = @(
@@ -95,5 +95,5 @@ jobs:
       - name: Upload Vortex package
         uses: actions/upload-artifact@v4
         with:
-          name: STRPluginMessagingAPI-v0.8.1-test-Vortex
-          path: STRPluginMessagingAPI-v0.8.1-test-Vortex.zip
+          name: STRPluginMessagingAPI-v0.8.2-test-Vortex
+          path: STRPluginMessagingAPI-v0.8.2-test-Vortex.zip
