@@ -136,11 +136,11 @@ namespace STRPMProxyResolverRuntime
                     listeners = _listeners;
             }
 
-            if (changed)
-            {
-                for (const auto& listener : listeners)
-                    listener.callback(&event, listener.userData);
-            }
+            if (!changed)
+                return STRPM::Result::kNotAvailable;
+
+            for (const auto& listener : listeners)
+                listener.callback(&event, listener.userData);
             return STRPM::Result::kOk;
         }
 
