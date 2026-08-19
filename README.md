@@ -183,10 +183,10 @@ including both `main.lua` and `strpm-chat-relay.manifest`.
 
 ## Build
 
-Normal Vortex/FOMOD package:
+### Normal release package
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\build-vortex.ps1
+.\build-vortex.ps1
 ```
 
 Output:
@@ -195,16 +195,34 @@ Output:
 dist/STRPluginMessagingAPI-v0.8.2-Vortex.zip
 ```
 
-E2E + ProxyResolver regression package:
+This build intentionally excludes `STRPluginMessagingDiagnostic.dll`.
+
+### Diagnostic test package
+
+For runtime/E2E tests, use the dedicated builder:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\build-vortex.ps1 -IncludeDiagnostic
+.\build-test-vortex.ps1
+```
+
+or simply:
+
+```bat
+build-test-vortex.bat
 ```
 
 Output:
 
 ```text
 dist/STRPluginMessagingAPI-v0.8.2-test-Vortex.zip
+```
+
+`build-test-vortex.ps1` always invokes the main builder with `-IncludeDiagnostic`, so the test archive cannot silently fall back to the normal package.
+
+The equivalent low-level command remains:
+
+```powershell
+.\build-vortex.ps1 -IncludeDiagnostic
 ```
 
 The normal package installs:
@@ -244,7 +262,7 @@ ProxyResolver observed STR transport disconnected; clearing mappings
 
 ## Remaining work
 
-- runtime-regression-test the v0.8.2 reconnect/log cleanup;
+- runtime-regression-test the v0.8.2 reconnect/log cleanup with the dedicated test package;
 - discover/report the local STR connection ID directly;
 - finalize `Host` target semantics;
 - migrate AnimSyncTogether first to STRPM messaging + ProxyResolver;
