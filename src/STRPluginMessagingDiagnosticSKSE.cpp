@@ -102,6 +102,13 @@ namespace
         return reinterpret_cast<IsSTRSessionConnectedFn>(raw)();
     }
 
+    void ResetSessionState()
+    {
+        g_peerObserved.store(false);
+        g_peerAckObserved.store(false);
+        g_peerConnectionID.store(0);
+    }
+
     void STRPM_CALL ReceiveDiagnostic(
         const STRPM::Message* message,
         void*)
@@ -126,7 +133,7 @@ namespace
             message->size,
             payload.c_str());
 
-        if (!IsPeerDiagnosticPayload(payloadView))
+        if (!IsSTRSessionConnected() || !IsPeerDiagnosticPayload(payloadView))
             return;
 
         g_peerConnectionID.store(message->sender.connectionID);
@@ -182,17 +189,24 @@ namespace
 
     bool ResolvePeerProxy(
         std::stop_token token,
-        const STRPM::ProxyResolverInterface* resolver)
+        const STRPM::ProxyResolverInterface* resolver,
+        std::uint32_t sessionNumber)
     {
         if (!resolver)
         {
-            Log("PROXY RESOLVE unavailable: public ProxyResolver interface not loaded");
+            Log("E2E SESSION %u PROXY RESOLVE unavailable: public ProxyResolver interface not loaded", sessionNumber);
             return false;
         }
 
         const auto deadline = std::chrono::steady_clock::now() + kProxyResolveTimeout;
         while (!token.stop_requested() && std::chrono::steady_clock::now() < deadline)
         {
+            if (!IsSTRSessionConnected())
+            {
+                Log("E2E SESSION %u PROXY RESOLVE aborted: STR disconnected", sessionNumber);
+                return false;
+            }
+
             const auto peer = g_peerConnectionID.load();
             if (peer != 0)
             {
@@ -201,7 +215,8 @@ namespace
                 if (result == STRPM::Result::kOk && formID != STRPM::kInvalidProxyFormID)
                 {
                     Log(
-                        "PROXY RESOLVE OK senderId=%llu formId=0x%08X",
+                        "E2E SESSION %u PROXY RESOLVE OK senderId=%llu formId=0x%08X",
+                        sessionNumber,
                         static_cast<unsigned long long>(peer),
                         static_cast<unsigned>(formID));
                     return true;
@@ -212,8 +227,155 @@ namespace
         }
 
         Log(
-            "PROXY RESOLVE TIMEOUT senderId=%llu (handshake transport is healthy; inspect bridge ProxyResolver lifecycle logs)",
+            "E2E SESSION %u PROXY RESOLVE TIMEOUT senderId=%llu (handshake transport is healthy; inspect bridge ProxyResolver lifecycle logs)",
+            sessionNumber,
             static_cast<unsigned long long>(g_peerConnectionID.load()));
+        return false;
+    }
+
+    bool WaitForConnection(std::stop_token token)
+    {
+        while (!token.stop_requested() && !IsSTRSessionConnected())
+        {
+            if (!SleepInterruptible(token, kConnectionPollDelay))
+                return false;
+        }
+        return !token.stop_requested();
+    }
+
+    bool WaitForDisconnect(std::stop_token token)
+    {
+        while (!token.stop_requested() && IsSTRSessionConnected())
+        {
+            if (!SleepInterruptible(token, kConnectionPollDelay))
+                return false;
+        }
+        return !token.stop_requested();
+    }
+
+    bool RunDiagnosticSession(
+        std::stop_token token,
+        const STRPM::Interface* api,
+        const STRPM::ProxyResolverInterface* proxyResolver,
+        std::uint32_t sessionNumber)
+    {
+        ResetSessionState();
+
+        if (!SleepInterruptible(token, kConnectionSettleDelay))
+            return false;
+        if (!IsSTRSessionConnected())
+        {
+            Log("E2E SESSION %u aborted during connection settle", sessionNumber);
+            return true;
+        }
+
+        Log("E2E SESSION %u START: STR connection observed; diagnostic sends enabled", sessionNumber);
+
+        STRPM::Target target{};
+        target.kind = STRPM::TargetKind::kAllPlayers;
+
+        auto lastWaitingLog = std::chrono::steady_clock::time_point{};
+        std::uint32_t probeNumber = 1;
+        while (!token.stop_requested() && probeNumber <= 2)
+        {
+            if (!IsSTRSessionConnected())
+            {
+                Log("E2E SESSION %u aborted: STR disconnected while probes were pending", sessionNumber);
+                return true;
+            }
+
+            const auto payload =
+                std::string("STRPM_E2E_V1|probe=") + std::to_string(probeNumber) +
+                "|pc=" + g_computerName +
+                "|pid=" + std::to_string(GetCurrentProcessId());
+
+            const auto result = SendDiagnosticPayload(api, target, payload);
+            if (result == STRPM::Result::kOk)
+            {
+                Log(
+                    "E2E SESSION %u SEND OK probe=%u target=all flags=0x%X bytes=%zu payload='%s'",
+                    sessionNumber,
+                    probeNumber,
+                    kProbeFlags,
+                    payload.size(),
+                    payload.c_str());
+                ++probeNumber;
+                if (probeNumber <= 2 && !SleepInterruptible(token, kProbeSpacing))
+                    return false;
+                continue;
+            }
+
+            const auto now = std::chrono::steady_clock::now();
+            if (lastWaitingLog.time_since_epoch().count() == 0 ||
+                now - lastWaitingLog >= kSendRetryLogInterval)
+            {
+                Log(
+                    "E2E SESSION %u send waiting after connected event: %s",
+                    sessionNumber,
+                    STRPM::ResultToString(result));
+                lastWaitingLog = now;
+            }
+
+            if (!SleepInterruptible(token, kSendRetryDelay))
+                return false;
+        }
+
+        Log("E2E SESSION %u initial probes complete; waiting for a peer probe before sending ACK", sessionNumber);
+
+        bool ackSent = false;
+        auto lastAckWaitingLog = std::chrono::steady_clock::time_point{};
+        while (!token.stop_requested())
+        {
+            if (!IsSTRSessionConnected())
+            {
+                Log("E2E SESSION %u aborted: STR disconnected while waiting for peer/ACK", sessionNumber);
+                return true;
+            }
+
+            if (g_peerObserved.load() && !ackSent)
+            {
+                const auto payload =
+                    std::string("STRPM_E2E_V1|ack=1|pc=") + g_computerName +
+                    "|pid=" + std::to_string(GetCurrentProcessId());
+                const auto result = SendDiagnosticPayload(api, target, payload);
+                if (result == STRPM::Result::kOk)
+                {
+                    Log(
+                        "E2E SESSION %u ACK SEND OK target=all flags=0x%X bytes=%zu payload='%s'",
+                        sessionNumber,
+                        kProbeFlags,
+                        payload.size(),
+                        payload.c_str());
+                    ackSent = true;
+                }
+                else
+                {
+                    const auto now = std::chrono::steady_clock::now();
+                    if (lastAckWaitingLog.time_since_epoch().count() == 0 ||
+                        now - lastAckWaitingLog >= kSendRetryLogInterval)
+                    {
+                        Log(
+                            "E2E SESSION %u ACK waiting: %s",
+                            sessionNumber,
+                            STRPM::ResultToString(result));
+                        lastAckWaitingLog = now;
+                    }
+                }
+            }
+
+            if (ackSent && g_peerAckObserved.load())
+            {
+                Log("E2E SESSION %u BIDIRECTIONAL HANDSHAKE COMPLETE", sessionNumber);
+                ResolvePeerProxy(token, proxyResolver, sessionNumber);
+                Log("E2E SESSION %u COMPLETE; waiting for disconnect before starting a new session", sessionNumber);
+                WaitForDisconnect(token);
+                return !token.stop_requested();
+            }
+
+            if (!SleepInterruptible(token, kHandshakePollDelay))
+                return false;
+        }
+
         return false;
     }
 
@@ -263,109 +425,23 @@ namespace
         }
         Log("registered public callback on channel '%s' for pc='%s'", kDiagnosticChannel, g_computerName.c_str());
 
-        Log("E2E waiting for authoritative STR OnConnected lifecycle event before sending probes");
-        while (!token.stop_requested() && !IsSTRSessionConnected())
-        {
-            if (!SleepInterruptible(token, kConnectionPollDelay))
-                return;
-        }
-        if (!SleepInterruptible(token, kConnectionSettleDelay))
-            return;
-        Log("E2E STR connection observed; diagnostic sends enabled");
-
-        STRPM::Target target{};
-        target.kind = STRPM::TargetKind::kAllPlayers;
-
-        auto lastWaitingLog = std::chrono::steady_clock::time_point{};
-        std::uint32_t probeNumber = 1;
-        while (!token.stop_requested() && probeNumber <= 2)
-        {
-            if (!IsSTRSessionConnected())
-            {
-                Log("E2E paused: STR disconnected while probes were pending");
-                while (!token.stop_requested() && !IsSTRSessionConnected())
-                {
-                    if (!SleepInterruptible(token, kConnectionPollDelay))
-                        return;
-                }
-                if (!SleepInterruptible(token, kConnectionSettleDelay))
-                    return;
-            }
-
-            const auto payload =
-                std::string("STRPM_E2E_V1|probe=") + std::to_string(probeNumber) +
-                "|pc=" + g_computerName +
-                "|pid=" + std::to_string(GetCurrentProcessId());
-
-            const auto result = SendDiagnosticPayload(api, target, payload);
-            if (result == STRPM::Result::kOk)
-            {
-                Log(
-                    "E2E SEND OK probe=%u target=all flags=0x%X bytes=%zu payload='%s'",
-                    probeNumber,
-                    kProbeFlags,
-                    payload.size(),
-                    payload.c_str());
-                ++probeNumber;
-                if (probeNumber <= 2 && !SleepInterruptible(token, kProbeSpacing))
-                    return;
-                continue;
-            }
-
-            const auto now = std::chrono::steady_clock::now();
-            if (lastWaitingLog.time_since_epoch().count() == 0 ||
-                now - lastWaitingLog >= kSendRetryLogInterval)
-            {
-                Log("E2E send waiting after connected event: %s", STRPM::ResultToString(result));
-                lastWaitingLog = now;
-            }
-
-            if (!SleepInterruptible(token, kSendRetryDelay))
-                return;
-        }
-
-        Log("E2E initial probes complete; waiting for a peer probe before sending ACK");
-
-        bool ackSent = false;
-        auto lastAckWaitingLog = std::chrono::steady_clock::time_point{};
+        std::uint32_t sessionNumber = 0;
         while (!token.stop_requested())
         {
-            if (g_peerObserved.load() && !ackSent)
-            {
-                const auto payload =
-                    std::string("STRPM_E2E_V1|ack=1|pc=") + g_computerName +
-                    "|pid=" + std::to_string(GetCurrentProcessId());
-                const auto result = SendDiagnosticPayload(api, target, payload);
-                if (result == STRPM::Result::kOk)
-                {
-                    Log(
-                        "E2E ACK SEND OK target=all flags=0x%X bytes=%zu payload='%s'",
-                        kProbeFlags,
-                        payload.size(),
-                        payload.c_str());
-                    ackSent = true;
-                }
-                else
-                {
-                    const auto now = std::chrono::steady_clock::now();
-                    if (lastAckWaitingLog.time_since_epoch().count() == 0 ||
-                        now - lastAckWaitingLog >= kSendRetryLogInterval)
-                    {
-                        Log("E2E ACK waiting: %s", STRPM::ResultToString(result));
-                        lastAckWaitingLog = now;
-                    }
-                }
-            }
-
-            if (ackSent && g_peerAckObserved.load())
-            {
-                Log("E2E BIDIRECTIONAL HANDSHAKE COMPLETE");
-                ResolvePeerProxy(token, proxyResolver);
+            ResetSessionState();
+            Log("E2E waiting for authoritative STR OnConnected lifecycle event before starting next session");
+            if (!WaitForConnection(token))
                 return;
-            }
 
-            if (!SleepInterruptible(token, kHandshakePollDelay))
+            ++sessionNumber;
+            if (!RunDiagnosticSession(token, api, proxyResolver, sessionNumber))
                 return;
+
+            if (!IsSTRSessionConnected())
+            {
+                ResetSessionState();
+                Log("E2E SESSION %u reset after disconnect", sessionNumber);
+            }
         }
     }
 }
@@ -373,7 +449,7 @@ namespace
 extern "C" __declspec(dllexport) STRPMSKSE::PluginVersionData SKSEPlugin_Version =
 {
     STRPMSKSE::PluginVersionData::kVersion,
-    STRPMSKSE::kPluginVersion_0_8_1,
+    STRPMSKSE::kPluginVersion_0_8_2,
     "STRPluginMessagingDiagnostic",
     "Caelvanost",
     "",
@@ -390,7 +466,7 @@ extern "C" __declspec(dllexport) bool SKSEPlugin_Load(const SKSEInterface*)
         fopen_s(&file, "Data\\SKSE\\Plugins\\STRPluginMessagingDiagnostic.log", "w");
         if (file)
         {
-            std::fprintf(file, "STRPluginMessagingDiagnostic v0.8.1: SKSEPlugin_Load entered\n");
+            std::fprintf(file, "STRPluginMessagingDiagnostic v0.8.2: SKSEPlugin_Load entered\n");
             std::fclose(file);
         }
     }
