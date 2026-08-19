@@ -2,7 +2,7 @@
 
 Shared messaging and STR player-proxy resolution for Skyrim Together Reborn compatibility mods.
 
-Current development version: **v0.8.0**.
+Current development version: **v0.8.1**.
 
 STRPluginMessagingAPI gives SKSE mods one common layer over the **official Skyrim Together Reborn 1.8.0 connection**. It is intended for mods such as AnimSyncTogether, OStimTogether, MorphSyncTogether, IEDSyncTogether and TradeTogether so each project does not need to duplicate networking or guess which Skyrim Actor represents a remote STR player.
 
@@ -24,9 +24,38 @@ official STR server + strpm-chat-relay Lua resource
 
 STRPM payloads use reserved `STRPM|v2|...` chat envelopes. v0.7.0 and later consume those packets at `TransportService::OnConsume` before STR's normal dispatcher, so transport packets never appear as yellow chat messages. Ordinary STR chat remains untouched.
 
-## v0.8.0 — ProxyResolver
+## v0.8.1 — ProxyResolver runtime discovery fix
 
-v0.8.0 adds a public **ProxyResolver** intended for animation, appearance and equipment synchronization mods.
+The first v0.8.0 runtime test proved that the public ProxyResolver interface loaded correctly and that the diagnostic client correctly stopped sending before STR connected, but the bridge remained at:
+
+```text
+ProxyResolver waiting for mapped STR 1.8.0 lifecycle functions
+```
+
+The original lifecycle resolver only recognized `LEA [RIP+disp32]` references to the `setPlayer3dLoaded` and `setPlayer3dUnloaded` literals. In the optimized STR 1.8.0 binary, MSVC may materialize those `std::string` temporaries with integer/SIMD RIP-relative loads instead.
+
+v0.8.1 replaces that narrow xref search with an optimized-binary resolver that recognizes LEA plus common integer and SIMD RIP-relative loads. It also logs the number of literal copies, xrefs and unwind-backed function candidates for each lifecycle method.
+
+Expected discovery diagnostics now include:
+
+```text
+ProxyResolver loaded resolver: anchorCopies=... flexibleXrefs=... functions=...
+ProxyResolver unloaded resolver: anchorCopies=... flexibleXrefs=... functions=...
+ProxyResolver waiting: spans=... transport=yes loaded=... unloaded=...
+```
+
+Once both functions resolve:
+
+```text
+ProxyResolver native lifecycle hooks armed: ...
+ProxyResolver call step-over controller armed
+```
+
+The validated v0.7.0 send/receive/chat-suppression path remains unchanged.
+
+## ProxyResolver
+
+v0.8.x adds a public **ProxyResolver** intended for animation, appearance and equipment synchronization mods.
 
 The design rule is explicit: consumer mods must **not** scan Skyrim `ProcessLists`, compare actor names or cache guessed dynamic FormIDs. STRPM owns STR-version-specific resolution and publishes a stable mapping:
 
@@ -87,7 +116,7 @@ AnimSyncTogether should use the sender ID carried by the STRPM message and ask P
 
 This keeps all STR 1.8.0 internals inside `STRPluginMessagingBridge.dll`.
 
-## v0.8.0 diagnostic cleanup
+## Diagnostic cleanup
 
 The optional diagnostic client no longer begins E2E sends merely because the DLLs have loaded. The bridge exports an internal regression-only connection signal driven by the real `TransportService::OnConnected`/`OnDisconnected` lifecycle. Diagnostic probes wait for that signal and pause again if STR disconnects.
 
@@ -117,7 +146,7 @@ The v0.7.0 transport baseline has been validated in game on two clients:
 - normal chat remains visible;
 - bidirectional E2E handshake completes on both clients.
 
-v0.8.0 deliberately leaves that validated send/receive/suppression implementation unchanged and adds ProxyResolver as an isolated bridge subsystem.
+v0.8.x deliberately leaves that validated send/receive/suppression implementation unchanged and adds ProxyResolver as an isolated bridge subsystem.
 
 ## Public API
 
@@ -165,19 +194,19 @@ SHA-256: 77f23c9c82c412252b5c4491a09d7ab4349cbc6c77992c4766882f54798cb99d
 
 ## Server resource
 
-v0.8.0 requires the updated resource:
+v0.8.x requires the v3 resource:
 
 ```text
 extras/str-server-resources/strpm-chat-relay/
 ```
 
-Replace the previous relay on the STR server. The server console must report:
+The server console must report:
 
 ```text
 [STRPM] Chat relay v3 loaded (ProxyResolver identity metadata enabled)
 ```
 
-The wire prefix remains `STRPM|v2|`; relay v3 only adds authenticated identity metadata required by ProxyResolver.
+The wire prefix remains `STRPM|v2|`; relay v3 only adds authenticated identity metadata required by ProxyResolver. If relay v3 is already installed from the v0.8.0 test, no server-side change is required for v0.8.1.
 
 ## Build
 
@@ -190,7 +219,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\build-vortex.ps1
 Output:
 
 ```text
-dist/STRPluginMessagingAPI-v0.8.0-Vortex.zip
+dist/STRPluginMessagingAPI-v0.8.1-Vortex.zip
 ```
 
 For E2E + ProxyResolver regression testing:
@@ -202,7 +231,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\build-vortex.ps1 -IncludeD
 Output:
 
 ```text
-dist/STRPluginMessagingAPI-v0.8.0-test-Vortex.zip
+dist/STRPluginMessagingAPI-v0.8.1-test-Vortex.zip
 ```
 
 Normal package:
@@ -219,12 +248,15 @@ Test package additionally contains:
 Data/SKSE/Plugins/STRPluginMessagingDiagnostic.dll
 ```
 
-## Expected v0.8.0 bridge logs
+## Expected v0.8.1 bridge logs
 
 In addition to the already validated transport lines, expect:
 
 ```text
+ProxyResolver loaded resolver: anchorCopies=... flexibleXrefs=... functions=...
+ProxyResolver unloaded resolver: anchorCopies=... flexibleXrefs=... functions=...
 ProxyResolver native lifecycle hooks armed: ...
+ProxyResolver call step-over controller armed
 ProxyResolver sender identity observer attached to validated OnConsume breakpoint
 ProxyResolver observed STR transport connected
 ProxyResolver proxy observed playerId=... formId=0xFF......
@@ -237,7 +269,7 @@ On disconnect:
 ProxyResolver observed STR transport disconnected; clearing mappings
 ```
 
-With the diagnostic build, both clients should still reach:
+With the diagnostic build, both clients should reach:
 
 ```text
 E2E BIDIRECTIONAL HANDSHAKE COMPLETE
@@ -248,10 +280,11 @@ Yellow `STRPM|v2|...` lines must remain absent and ordinary messages such as `te
 
 ## Remaining work
 
-- runtime-validate the new v0.8.0 ProxyResolver on both clients;
+- runtime-validate the v0.8.1 ProxyResolver on both clients;
 - discover/report the local STR connection ID directly;
 - finalize `Host` target semantics;
 - migrate AnimSyncTogether first, then OStimTogether, MorphSyncTogether, IEDSyncTogether and TradeTogether to the shared API;
+- add the planned FOMOD with optional direct installation of the STR server resource under `Data/SkyrimTogetherReborn` once the exact standard server resource path is locked down;
 - remove obsolete experimental 0.6.x UI-suppression source files after the current regression cycle.
 
 ## Design rule
