@@ -13,7 +13,7 @@ struct SKSEInterface;
 extern "C" __declspec(dllexport) STRPMSKSE::PluginVersionData SKSEPlugin_Version =
 {
     STRPMSKSE::PluginVersionData::kVersion,
-    STRPMSKSE::kPluginVersion_0_8_2,
+    STRPMSKSE::kPluginVersion_0_8_3,
     "STRPluginMessagingBridge",
     "Caelvanost",
     "",
@@ -29,7 +29,7 @@ extern "C" __declspec(dllexport) bool SKSEPlugin_Load(const SKSEInterface*)
     fopen_s(&file, "Data\\SKSE\\Plugins\\STRPluginMessagingBridge.log", "a");
     if (file != nullptr)
     {
-        std::fprintf(file, "STRPluginMessagingBridge v0.8.2: SKSEPlugin_Load entered\n");
+        std::fprintf(file, "STRPluginMessagingBridge v0.8.3: SKSEPlugin_Load entered\n");
         std::fclose(file);
     }
 
