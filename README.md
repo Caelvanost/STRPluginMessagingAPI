@@ -2,7 +2,7 @@
 
 Shared messaging and STR player-proxy resolution for Skyrim Together Reborn compatibility mods.
 
-Current development version: **v0.8.2**.
+Current development version: **v0.8.3**.
 
 STRPluginMessagingAPI gives SKSE mods one common layer over the **official Skyrim Together Reborn 1.8.0 connection**. It is intended for mods such as AnimSyncTogether, OStimTogether, MorphSyncTogether, IEDSyncTogether and TradeTogether so each project does not need to duplicate networking or guess which Skyrim Actor represents a remote STR player.
 
@@ -23,6 +23,32 @@ official STR server + strpm-chat-relay Lua resource
 ```
 
 STRPM payloads use reserved `STRPM|v2|...` chat envelopes. v0.7.0 and later consume those packets at `TransportService::OnConsume` before STR's normal dispatcher, so transport packets never appear as yellow chat messages. Ordinary STR chat remains untouched.
+
+## v0.8.3 — deferred receive callback dispatch
+
+v0.8.3 fixes a threading problem exposed by the first real STRPM consumer integration in TradeTogether.
+
+Before v0.8.3, the bridge passed the consumer receive callback directly into the `TransportService::OnConsume` interception path. Because the receive hook is implemented through the STR bridge's vectored-exception/breakpoint handler, consumer code could therefore execute synchronously inside STR's receive/VEH context. Gameplay/UI work performed by a consumer from that callback could stall or freeze the receiver.
+
+v0.8.3 keeps the public API and wire protocol unchanged but changes the runtime dispatch model:
+
+```text
+STR TransportService::OnConsume / VEH
+        ↓
+internal STRPM receive thunk
+        ↓ copy only
+bounded FIFO dispatch queue
+        ↓
+STRPM receive dispatcher thread
+        ↓
+registered consumer callback
+```
+
+The bridge queue is bounded to 256 completed messages and preserves FIFO completion order. The `STRPM|v2|` wire format, relay v3, channel API and ProxyResolver ABI are unchanged.
+
+Consumer callbacks now run outside STR's `OnConsume`/VEH context. They are still **not Skyrim's game thread**: consumers must continue to schedule Skyrim object lookup, UI work and game-state mutations onto the appropriate SKSE/game thread.
+
+This centralizes the receive-thread safety rule in STRPM instead of requiring every consumer mod to implement its own defensive receive queue.
 
 ## v0.8.2 — session/log cleanup
 
@@ -192,7 +218,7 @@ including both `main.lua` and `strpm-chat-relay.manifest`.
 Output:
 
 ```text
-dist/STRPluginMessagingAPI-v0.8.2-Vortex.zip
+dist/STRPluginMessagingAPI-v0.8.3-Vortex.zip
 ```
 
 This build intentionally excludes `STRPluginMessagingDiagnostic.dll`.
@@ -214,7 +240,7 @@ build-test-vortex.bat
 Output:
 
 ```text
-dist/STRPluginMessagingAPI-v0.8.2-test-Vortex.zip
+dist/STRPluginMessagingAPI-v0.8.3-test-Vortex.zip
 ```
 
 `build-test-vortex.ps1` always invokes the main builder with `-IncludeDiagnostic`, so the test archive cannot silently fall back to the normal package.
@@ -239,7 +265,16 @@ The test package additionally contains:
 Data/SKSE/Plugins/STRPluginMessagingDiagnostic.dll
 ```
 
-## Expected v0.8.2 bridge logs
+## Expected v0.8.3 bridge logs
+
+In addition to the existing transport and ProxyResolver diagnostics, the bridge should report:
+
+```text
+STRPM receive callback dispatcher started
+STRPM receive path resolved and armed; consumer callbacks are deferred outside STR OnConsume/VEH
+```
+
+The validated ProxyResolver lifecycle remains:
 
 ```text
 ProxyResolver loaded resolver: anchorCopies=... flexibleXrefs=... functions=...
@@ -252,7 +287,7 @@ ProxyResolver proxy observed playerId=... formId=0xFF......
 ProxyResolver mapping ready connection=... formId=0xFF......
 ```
 
-`mapping ready` should now appear only when a mapping is added or actually changed, not once per periodic flush.
+`mapping ready` appears only when a mapping is added or actually changed, not once per periodic flush.
 
 On disconnect:
 
@@ -262,7 +297,7 @@ ProxyResolver observed STR transport disconnected; clearing mappings
 
 ## Remaining work
 
-- runtime-regression-test the v0.8.2 reconnect/log cleanup with the dedicated test package;
+- runtime-regression-test v0.8.3 with TradeTogether and confirm its consumer callback no longer executes inside STR's receive/VEH context;
 - discover/report the local STR connection ID directly;
 - finalize `Host` target semantics;
 - migrate AnimSyncTogether first to STRPM messaging + ProxyResolver;
