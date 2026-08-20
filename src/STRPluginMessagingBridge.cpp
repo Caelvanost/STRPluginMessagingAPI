@@ -9,10 +9,12 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cstdarg>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <deque>
 #include <mutex>
 #include <optional>
 #include <sstream>
@@ -30,6 +32,7 @@ namespace
     constexpr std::size_t kMaxFragments = 64;
     constexpr std::size_t kMaxCallDistanceAfterAnchor = 0x200;
     constexpr std::size_t kExpectedClientMessageOpcodeOffset = 16;
+    constexpr std::size_t kMaxReceiveDispatchQueue = 256;
     constexpr auto kBootstrapRetryDelay = std::chrono::milliseconds(750);
 
     struct MemorySpan
@@ -78,12 +81,29 @@ namespace
         ShadowBuffer* buffer{ nullptr };
     };
 
+    struct DeferredReceiveMessage
+    {
+        std::string channel;
+        std::vector<std::uint8_t> payload;
+        std::string senderName;
+        STRPM::ConnectionID senderId{ 0 };
+        std::uint32_t flags{ 0 };
+        std::uint64_t sequence{ 0 };
+    };
+
     std::mutex g_lock;
     std::mutex g_sendLock;
     STRPM::ReceiveCallback g_callback = nullptr;
     void* g_userData = nullptr;
     std::string g_displayName;
     std::atomic<std::uint64_t> g_sequence{ 1 };
+
+    std::mutex g_receiveDispatchLock;
+    std::condition_variable g_receiveDispatchCv;
+    std::deque<DeferredReceiveMessage> g_receiveDispatchQueue;
+    std::atomic<bool> g_receiveDispatchRunning{ false };
+    std::atomic<std::uint32_t> g_receiveDispatchDropped{ 0 };
+    std::thread g_receiveDispatchThread;
 
     HMODULE g_selfModule = nullptr;
     std::vector<MemorySpan> g_memory;
@@ -117,6 +137,148 @@ namespace
         va_end(args);
         fputc('\n', file);
         fclose(file);
+    }
+
+    void ReceiveDispatchLoop()
+    {
+        Log("STRPM receive callback dispatcher started");
+
+        for (;;)
+        {
+            DeferredReceiveMessage queued{};
+            {
+                std::unique_lock lock(g_receiveDispatchLock);
+                g_receiveDispatchCv.wait(lock, [] {
+                    return !g_receiveDispatchRunning.load() || !g_receiveDispatchQueue.empty();
+                });
+
+                if (!g_receiveDispatchRunning.load() && g_receiveDispatchQueue.empty())
+                    break;
+
+                queued = std::move(g_receiveDispatchQueue.front());
+                g_receiveDispatchQueue.pop_front();
+            }
+
+            STRPM::ReceiveCallback callback = nullptr;
+            void* userData = nullptr;
+            {
+                std::scoped_lock lock(g_lock);
+                callback = g_callback;
+                userData = g_userData;
+            }
+
+            if (!callback)
+                continue;
+
+            STRPM::Message message{};
+            message.channel = queued.channel.c_str();
+            message.data = queued.payload.empty() ? nullptr : queued.payload.data();
+            message.size = queued.payload.size();
+            message.sender.connectionID = queued.senderId;
+            message.sender.displayName = queued.senderName.c_str();
+            message.sender.isHost = false;
+            message.flags = queued.flags;
+            message.sequence = queued.sequence;
+
+            try
+            {
+                callback(&message, userData);
+            }
+            catch (...)
+            {
+                Log("STRPM consumer receive callback threw an exception; message dropped");
+            }
+        }
+
+        Log("STRPM receive callback dispatcher stopped");
+    }
+
+    bool StartReceiveDispatch()
+    {
+        bool expected = false;
+        if (!g_receiveDispatchRunning.compare_exchange_strong(expected, true))
+            return true;
+
+        g_receiveDispatchDropped.store(0);
+        {
+            std::scoped_lock lock(g_receiveDispatchLock);
+            g_receiveDispatchQueue.clear();
+        }
+
+        try
+        {
+            g_receiveDispatchThread = std::thread(&ReceiveDispatchLoop);
+        }
+        catch (...)
+        {
+            g_receiveDispatchRunning.store(false);
+            return false;
+        }
+        return true;
+    }
+
+    void StopReceiveDispatch()
+    {
+        if (!g_receiveDispatchRunning.exchange(false))
+            return;
+
+        {
+            std::scoped_lock lock(g_receiveDispatchLock);
+            g_receiveDispatchQueue.clear();
+        }
+        g_receiveDispatchCv.notify_all();
+
+        if (g_receiveDispatchThread.joinable())
+            g_receiveDispatchThread.join();
+
+        const auto dropped = g_receiveDispatchDropped.exchange(0);
+        if (dropped != 0)
+            Log("STRPM receive dispatcher dropped %u message(s) because its queue was full", dropped);
+    }
+
+    void STRPM_CALL DeferredReceiveThunk(const STRPM::Message* message, void*)
+    {
+        if (!message || !message->channel ||
+            (message->data == nullptr && message->size != 0) ||
+            message->size > STRPM::kMaxPayloadBytes ||
+            !g_receiveDispatchRunning.load())
+        {
+            return;
+        }
+
+        DeferredReceiveMessage queued{};
+        try
+        {
+            queued.channel = message->channel;
+            queued.senderName = message->sender.displayName ? message->sender.displayName : "STR";
+            queued.senderId = message->sender.connectionID;
+            queued.flags = message->flags;
+            queued.sequence = message->sequence;
+
+            if (message->size != 0)
+            {
+                const auto* begin = static_cast<const std::uint8_t*>(message->data);
+                queued.payload.assign(begin, begin + message->size);
+            }
+        }
+        catch (...)
+        {
+            g_receiveDispatchDropped.fetch_add(1);
+            return;
+        }
+
+        {
+            std::scoped_lock lock(g_receiveDispatchLock);
+            if (!g_receiveDispatchRunning.load())
+                return;
+            if (g_receiveDispatchQueue.size() >= kMaxReceiveDispatchQueue)
+            {
+                g_receiveDispatchDropped.fetch_add(1);
+                return;
+            }
+            g_receiveDispatchQueue.push_back(std::move(queued));
+        }
+        g_receiveDispatchCv.notify_one();
     }
 
     void ResolveSelfModule()
@@ -826,19 +988,11 @@ namespace
                 }
                 else
                 {
-                    STRPM::ReceiveCallback callback = nullptr;
-                    void* userData = nullptr;
-                    {
-                        std::scoped_lock lock(g_lock);
-                        callback = g_callback;
-                        userData = g_userData;
-                    }
-
-                    if (callback && STRPMBridgeReceive::Start(callback, userData))
+                    if (STRPMBridgeReceive::Start(&DeferredReceiveThunk, nullptr))
                     {
                         g_receiveResolverReady.store(true);
                         loggedReceiveFailure = false;
-                        Log("STRPM receive path resolved and armed");
+                        Log("STRPM receive path resolved and armed; consumer callbacks are deferred outside STR OnConsume/VEH");
                     }
                     else if (!loggedReceiveFailure)
                     {
@@ -907,12 +1061,25 @@ namespace
         Log("source tag: tiltedphoques/TiltedEvolution v1.8.0 (9c23efa422bbc1e5c06eef5522ca73971a513e35)");
         Log("Nexus public exe SHA-256: 77f23c9c82c412252b5c4491a09d7ab4349cbc6c77992c4766882f54798cb99d");
 
+        if (!StartReceiveDispatch())
+        {
+            Log("failed to start STRPM receive callback dispatcher");
+            std::scoped_lock lock(g_lock);
+            g_callback = nullptr;
+            g_userData = nullptr;
+            return STRPM::Result::kTransportError;
+        }
+
         // The official executable maps/unpacks the actual client runtime during
         // startup. Keep the bridge active and resolve lazily instead of failing if
         // the runtime image is not present during the SKSE plugin load phase.
         if (!StartBootstrap())
         {
             Log("failed to start STRPM bridge bootstrap thread");
+            StopReceiveDispatch();
+            std::scoped_lock lock(g_lock);
+            g_callback = nullptr;
+            g_userData = nullptr;
             return STRPM::Result::kTransportError;
         }
 
@@ -935,6 +1102,8 @@ namespace
         g_transportSendAddress.store(0);
         g_sendResolverReady.store(false);
         g_receiveResolverReady.store(false);
+
+        StopReceiveDispatch();
 
         std::scoped_lock lock(g_lock);
         g_callback = nullptr;
