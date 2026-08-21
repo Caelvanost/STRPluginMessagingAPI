@@ -13,7 +13,7 @@ struct SKSEInterface;
 extern "C" __declspec(dllexport) STRPMSKSE::PluginVersionData SKSEPlugin_Version =
 {
     STRPMSKSE::PluginVersionData::kVersion,
-    STRPMSKSE::kPluginVersion_0_8_3,
+    STRPMSKSE::kPluginVersion_0_9_0,
     "STRPluginMessagingBridge",
     "Caelvanost",
     "",
@@ -29,13 +29,13 @@ extern "C" __declspec(dllexport) bool SKSEPlugin_Load(const SKSEInterface*)
     fopen_s(&file, "Data\\SKSE\\Plugins\\STRPluginMessagingBridge.log", "a");
     if (file != nullptr)
     {
-        std::fprintf(file, "STRPluginMessagingBridge v0.8.3: SKSEPlugin_Load entered\n");
+        std::fprintf(file, "STRPluginMessagingBridge v0.9.0: SKSEPlugin_Load entered\n");
         std::fclose(file);
     }
 
-    // Keep the validated v0.7.0 transport/suppression path unchanged. The
-    // v0.8.x ProxyResolver is isolated here and observes canonical STR player
-    // lifecycle data without scanning Skyrim ProcessLists or guessing actors.
+    // Keep the validated transport/proxy resolver path isolated here. v0.9.0
+    // changes the receive execution model so STRPM envelope parsing and consumer
+    // dispatch no longer run from the TransportService::OnConsume VEH.
     STRPMProxyResolverBootstrapV2::Start();
     STRPMProxyResolverTrace::Start();
 
