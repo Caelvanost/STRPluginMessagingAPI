@@ -9,6 +9,7 @@
 #include <Windows.h>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <charconv>
 #include <chrono>
@@ -19,6 +20,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <unordered_map>
 #include <vector>
 
@@ -38,6 +40,12 @@ namespace STRPMBridgeReceive
         constexpr std::size_t kMaxPacketBytes = 256u * 1024u;
         constexpr std::size_t kChunkBytes = 1u * 1024u * 1024u;
         constexpr auto kPendingLifetime = std::chrono::seconds(30);
+
+        // BuildEnvelopes in STRPluginMessagingBridge.cpp caps every chat envelope
+        // at 3500 characters. A 16 KiB raw packet cap therefore leaves ample
+        // room for the STR chat packet framing while keeping the VEH queue small.
+        constexpr std::size_t kMaxCapturedPacketBytes = 16u * 1024u;
+        constexpr std::size_t kCaptureQueueCapacity = 64;
 
         struct MemorySpan
         {
@@ -87,10 +95,26 @@ namespace STRPMBridgeReceive
             std::vector<std::uint8_t> payload;
         };
 
+        struct CapturedPacket
+        {
+            // 0 = free, 1 = producer writing, 2 = ready for dispatcher.
+            std::atomic<std::uint32_t> state{ 0 };
+            std::uint64_t order{ 0 };
+            std::uint32_t size{ 0 };
+            std::array<std::uint8_t, kMaxCapturedPacketBytes> bytes{};
+        };
+
         STRPM::ReceiveCallback g_callback = nullptr;
         void* g_userData = nullptr;
         std::mutex g_pendingLock;
         std::unordered_map<std::string, PendingMessage> g_pending;
+
+        std::array<CapturedPacket, kCaptureQueueCapacity> g_captureQueue{};
+        std::atomic<std::uint64_t> g_captureOrder{ 1 };
+        std::atomic<std::size_t> g_captureProbe{ 0 };
+        std::atomic<std::uint32_t> g_captureDropped{ 0 };
+        std::atomic_bool g_captureDispatchRunning{ false };
+        std::thread g_captureDispatchThread;
 
         std::uintptr_t g_onConsumeAddress = 0;
         std::uint8_t g_originalByte = 0;
@@ -623,6 +647,114 @@ namespace STRPMBridgeReceive
             return chatMessage.starts_with(kEnvelopePrefix);
         }
 
+        bool ReadVarUIntFromLocalPacket(
+            const std::uint8_t* bytes,
+            std::size_t size,
+            std::size_t& position,
+            std::uint64_t& value) noexcept
+        {
+            value = 0;
+            std::uint32_t shift = 0;
+            while (position < size && shift < 64)
+            {
+                const auto byte = bytes[position++];
+                value |= static_cast<std::uint64_t>(byte & 0x7Fu) << shift;
+                if ((byte & 0x80u) == 0)
+                    return true;
+                shift += 7;
+            }
+            return false;
+        }
+
+        bool IsSTRPMChatPacketLocal(const std::uint8_t* bytes, std::size_t size) noexcept
+        {
+            if (!bytes || size < 4 || bytes[0] != kNotifyChatMessageBroadcastOpcode)
+                return false;
+
+            std::size_t position = 1;
+            std::uint64_t ignoredMessageType = 0;
+            if (!ReadVarUIntFromLocalPacket(bytes, size, position, ignoredMessageType))
+                return false;
+
+            std::uint64_t rawPlayerNameLength = 0;
+            if (!ReadVarUIntFromLocalPacket(bytes, size, position, rawPlayerNameLength))
+                return false;
+            const auto playerNameLength = static_cast<std::size_t>(rawPlayerNameLength & 0xFFFFu);
+            if (position + playerNameLength > size)
+                return false;
+            position += playerNameLength;
+
+            std::uint64_t rawChatLength = 0;
+            if (!ReadVarUIntFromLocalPacket(bytes, size, position, rawChatLength))
+                return false;
+            const auto chatLength = static_cast<std::size_t>(rawChatLength & 0xFFFFu);
+            if (chatLength < kEnvelopePrefix.size() || position + chatLength > size)
+                return false;
+
+            return std::memcmp(bytes + position, kEnvelopePrefix.data(), kEnvelopePrefix.size()) == 0;
+        }
+
+        CapturedPacket* ReserveCaptureSlot() noexcept
+        {
+            const auto start = g_captureProbe.fetch_add(1, std::memory_order_relaxed);
+            for (std::size_t offset = 0; offset < kCaptureQueueCapacity; ++offset)
+            {
+                auto& slot = g_captureQueue[(start + offset) % kCaptureQueueCapacity];
+                std::uint32_t expected = 0;
+                if (slot.state.compare_exchange_strong(
+                        expected,
+                        1,
+                        std::memory_order_acq_rel,
+                        std::memory_order_relaxed))
+                {
+                    return &slot;
+                }
+            }
+            return nullptr;
+        }
+
+        bool TryCaptureSTRPMPacket(const void* packetData, std::uint32_t packetSize) noexcept
+        {
+            if (!packetData || packetSize == 0 || packetSize > kMaxCapturedPacketBytes)
+                return false;
+
+            std::uint8_t opcode = 0;
+            if (!ReadProcessValue(reinterpret_cast<std::uintptr_t>(packetData), opcode) ||
+                opcode != kNotifyChatMessageBroadcastOpcode)
+            {
+                return false;
+            }
+
+            auto* slot = ReserveCaptureSlot();
+            if (!slot)
+            {
+                g_captureDropped.fetch_add(1, std::memory_order_relaxed);
+                return false;
+            }
+
+            slot->size = 0;
+            slot->order = 0;
+            if (!ReadProcessBytes(
+                    reinterpret_cast<std::uintptr_t>(packetData),
+                    slot->bytes.data(),
+                    packetSize))
+            {
+                slot->state.store(0, std::memory_order_release);
+                return false;
+            }
+
+            if (!IsSTRPMChatPacketLocal(slot->bytes.data(), packetSize))
+            {
+                slot->state.store(0, std::memory_order_release);
+                return false;
+            }
+
+            slot->size = packetSize;
+            slot->order = g_captureOrder.fetch_add(1, std::memory_order_relaxed);
+            slot->state.store(2, std::memory_order_release);
+            return true;
+        }
+
         std::optional<std::string_view> ReadField(std::string_view packet, std::string_view key)
         {
             std::size_t start = 0;
@@ -809,6 +941,129 @@ namespace STRPMBridgeReceive
             g_callback(&message, g_userData);
         }
 
+        CapturedPacket* FindNextReadyCapture() noexcept
+        {
+            CapturedPacket* selected = nullptr;
+            std::uint64_t selectedOrder = 0;
+            for (auto& slot : g_captureQueue)
+            {
+                if (slot.state.load(std::memory_order_acquire) != 2)
+                    continue;
+                if (!selected || slot.order < selectedOrder)
+                {
+                    selected = &slot;
+                    selectedOrder = slot.order;
+                }
+            }
+            return selected;
+        }
+
+        void CaptureDispatchLoop()
+        {
+            Log("STRPM raw receive dispatcher started; VEH parsing reduced to fixed-buffer capture");
+
+            while (g_captureDispatchRunning.load(std::memory_order_acquire))
+            {
+                auto* slot = FindNextReadyCapture();
+                if (!slot)
+                {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                    continue;
+                }
+
+                std::string playerName;
+                std::string chatMessage;
+                if (PeekRawChatEnvelope(
+                        slot->bytes.data(),
+                        slot->size,
+                        playerName,
+                        chatMessage))
+                {
+                    DeliverEnvelope(playerName, chatMessage);
+                }
+
+                slot->size = 0;
+                slot->order = 0;
+                slot->state.store(0, std::memory_order_release);
+            }
+
+            // Drain captures already accepted by the VEH before shutdown.
+            for (;;)
+            {
+                auto* slot = FindNextReadyCapture();
+                if (!slot)
+                    break;
+
+                std::string playerName;
+                std::string chatMessage;
+                if (PeekRawChatEnvelope(
+                        slot->bytes.data(),
+                        slot->size,
+                        playerName,
+                        chatMessage))
+                {
+                    DeliverEnvelope(playerName, chatMessage);
+                }
+                slot->size = 0;
+                slot->order = 0;
+                slot->state.store(0, std::memory_order_release);
+            }
+
+            const auto dropped = g_captureDropped.load(std::memory_order_relaxed);
+            if (dropped != 0)
+            {
+                FILE* file = nullptr;
+                fopen_s(&file, "Data\\SKSE\\Plugins\\STRPluginMessagingBridge.log", "a");
+                if (file)
+                {
+                    std::fprintf(file,
+                        "STRPM raw receive dispatcher stopped: captureQueueDropped=%u\n",
+                        dropped);
+                    std::fclose(file);
+                }
+            }
+            else
+            {
+                Log("STRPM raw receive dispatcher stopped: captureQueueDropped=0");
+            }
+        }
+
+        bool StartCaptureDispatch() noexcept
+        {
+            bool expected = false;
+            if (!g_captureDispatchRunning.compare_exchange_strong(expected, true))
+                return true;
+
+            g_captureOrder.store(1, std::memory_order_relaxed);
+            g_captureProbe.store(0, std::memory_order_relaxed);
+            g_captureDropped.store(0, std::memory_order_relaxed);
+            for (auto& slot : g_captureQueue)
+            {
+                slot.size = 0;
+                slot.order = 0;
+                slot.state.store(0, std::memory_order_relaxed);
+            }
+
+            try
+            {
+                g_captureDispatchThread = std::thread(&CaptureDispatchLoop);
+            }
+            catch (...)
+            {
+                g_captureDispatchRunning.store(false);
+                return false;
+            }
+            return true;
+        }
+
+        void StopCaptureDispatch() noexcept
+        {
+            if (!g_captureDispatchRunning.exchange(false))
+                return;
+            if (g_captureDispatchThread.joinable())
+                g_captureDispatchThread.join();
+        }
+
         LONG CALLBACK ReceiveExceptionHandler(EXCEPTION_POINTERS* exceptionInfo)
         {
             if (!exceptionInfo || !exceptionInfo->ExceptionRecord || !exceptionInfo->ContextRecord)
@@ -819,7 +1074,7 @@ namespace STRPMBridgeReceive
 
             if (code == EXCEPTION_SINGLE_STEP && g_rearmAfterSingleStep)
             {
-                if (g_breakpointArmed.load())
+                if (g_breakpointArmed.load(std::memory_order_relaxed))
                     PatchByte(g_onConsumeAddress, 0xCC);
                 g_rearmAfterSingleStep = false;
                 context->EFlags &= ~0x100u;
@@ -828,42 +1083,24 @@ namespace STRPMBridgeReceive
 
             if (code != EXCEPTION_BREAKPOINT ||
                 reinterpret_cast<std::uintptr_t>(exceptionInfo->ExceptionRecord->ExceptionAddress) != g_onConsumeAddress ||
-                !g_breakpointArmed.load())
+                !g_breakpointArmed.load(std::memory_order_relaxed))
             {
                 return EXCEPTION_CONTINUE_SEARCH;
             }
 
-            std::string playerName;
-            std::string chatMessage;
             const auto packetData = reinterpret_cast<const void*>(context->Rdx);
             const auto packetSize = static_cast<std::uint32_t>(context->R8 & 0xFFFFFFFFu);
-            if (PeekRawChatEnvelope(packetData, packetSize, playerName, chatMessage))
+            if (TryCaptureSTRPMPacket(packetData, packetSize))
             {
-                // Deliver to STRPM first, then remove this packet from STR's own
-                // ServerMessageFactory/dispatcher pipeline. OnConsume is a void
-                // virtual and we are at its first instruction, so emulating its
-                // return requires no stack-frame or local-object unwinding.
-                DeliverEnvelope(playerName, chatMessage);
-
+                // The VEH does not parse fields, reconstruct fragments, log, lock,
+                // allocate, or call consumer code. It only copies the raw STRPM
+                // chat packet into a preallocated atomic slot and suppresses that
+                // packet before STR's own chat dispatcher.
                 std::uintptr_t returnAddress = 0;
                 if (ReadProcessValue(static_cast<std::uintptr_t>(context->Rsp), returnAddress) &&
                     returnAddress != 0)
                 {
-                    const auto previous = g_suppressedLogCount.fetch_add(1);
-                    if (previous < 16)
-                    {
-                        FILE* file = nullptr;
-                        fopen_s(&file, "Data\\SKSE\\Plugins\\STRPluginMessagingBridge.log", "a");
-                        if (file)
-                        {
-                            std::fprintf(file,
-                                "STRPM packet consumed before STR dispatcher thread=%lu bytes=%u\n",
-                                static_cast<unsigned long>(GetCurrentThreadId()),
-                                static_cast<unsigned>(packetSize));
-                            std::fclose(file);
-                        }
-                    }
-
+                    g_suppressedLogCount.fetch_add(1, std::memory_order_relaxed);
                     context->Rsp += sizeof(std::uintptr_t);
                     context->Rip = static_cast<DWORD64>(returnAddress);
                     return EXCEPTION_CONTINUE_EXECUTION;
@@ -913,15 +1150,32 @@ namespace STRPMBridgeReceive
         if (IsResolved())
             return true;
 
-        if (!ResolveOnConsumeAddress())
+        if (!StartCaptureDispatch())
+        {
+            Log("receive resolver: failed to start raw receive dispatcher");
+            g_callback = nullptr;
+            g_userData = nullptr;
             return false;
+        }
+
+        if (!ResolveOnConsumeAddress())
+        {
+            StopCaptureDispatch();
+            g_callback = nullptr;
+            g_userData = nullptr;
+            return false;
+        }
         if (!ArmBreakpoint())
         {
             Log("receive resolver: failed to arm TransportService::OnConsume breakpoint");
+            StopCaptureDispatch();
+            g_callback = nullptr;
+            g_userData = nullptr;
             return false;
         }
         Log("receive breakpoint armed for TransportService::OnConsume");
         Log("STRPM chat suppression active before STR ServerMessageFactory/dispatcher");
+        Log("STRPM VEH receive path uses fixed-buffer raw capture; parsing and callbacks are deferred");
         return true;
     }
 
@@ -936,9 +1190,18 @@ namespace STRPMBridgeReceive
             g_vectoredHandler = nullptr;
         }
 
+        StopCaptureDispatch();
+
         {
             std::scoped_lock lock(g_pendingLock);
             g_pending.clear();
+        }
+
+        for (auto& slot : g_captureQueue)
+        {
+            slot.size = 0;
+            slot.order = 0;
+            slot.state.store(0, std::memory_order_relaxed);
         }
 
         g_callback = nullptr;
@@ -946,10 +1209,13 @@ namespace STRPMBridgeReceive
         g_onConsumeAddress = 0;
         g_rearmAfterSingleStep = false;
         g_suppressedLogCount.store(0);
+        g_captureDropped.store(0);
     }
 
     bool IsResolved() noexcept
     {
-        return g_onConsumeAddress != 0 && g_breakpointArmed.load();
+        return g_onConsumeAddress != 0 &&
+               g_breakpointArmed.load() &&
+               g_captureDispatchRunning.load();
     }
 }
