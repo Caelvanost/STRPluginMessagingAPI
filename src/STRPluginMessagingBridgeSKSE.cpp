@@ -129,8 +129,8 @@ namespace
                         result != STRPM::Result::kNotAvailable)
                     {
                         LogIdentity(
-                            "ProxyResolver identity bootstrap waiting: %s",
-                            STRPM::ResultToString(result));
+                            "ProxyResolver identity bootstrap waiting: result=%u",
+                            static_cast<unsigned>(result));
                         loggedWaiting = true;
                     }
                     nextHeartbeat = now + kIdentityRetryDelay;
