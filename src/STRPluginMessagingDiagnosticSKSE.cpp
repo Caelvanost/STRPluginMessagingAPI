@@ -29,7 +29,7 @@ namespace
     constexpr auto kProbeSpacing = std::chrono::seconds(5);
     constexpr auto kHandshakePollDelay = std::chrono::milliseconds(250);
     constexpr auto kProxyPollDelay = std::chrono::milliseconds(250);
-    constexpr auto kProxyResolveTimeout = std::chrono::seconds(15);
+    constexpr auto kProxyPendingLogInterval = std::chrono::seconds(15);
     constexpr std::uint32_t kProbeFlags =
         STRPM::kMessageReliable |
         STRPM::kMessageOrdered |
@@ -109,9 +109,7 @@ namespace
         g_peerConnectionID.store(0);
     }
 
-    void STRPM_CALL ReceiveDiagnostic(
-        const STRPM::Message* message,
-        void*)
+    void STRPM_CALL ReceiveDiagnostic(const STRPM::Message* message, void*)
     {
         if (!message)
             return;
@@ -146,21 +144,17 @@ namespace
                 payload.c_str());
         }
 
-        if (payloadView.starts_with("STRPM_E2E_V1|ack=1|"))
+        if (payloadView.starts_with("STRPM_E2E_V1|ack=1|") &&
+            !g_peerAckObserved.exchange(true))
         {
-            if (!g_peerAckObserved.exchange(true))
-            {
-                Log(
-                    "E2E PEER ACK OBSERVED senderId=%llu senderName='%s'",
-                    static_cast<unsigned long long>(message->sender.connectionID),
-                    senderName);
-            }
+            Log(
+                "E2E PEER ACK OBSERVED senderId=%llu senderName='%s'",
+                static_cast<unsigned long long>(message->sender.connectionID),
+                senderName);
         }
     }
 
-    bool SleepInterruptible(
-        std::stop_token token,
-        std::chrono::milliseconds duration)
+    bool SleepInterruptible(std::stop_token token, std::chrono::milliseconds duration)
     {
         constexpr auto slice = std::chrono::milliseconds(100);
         auto slept = std::chrono::milliseconds(0);
@@ -198,8 +192,8 @@ namespace
             return false;
         }
 
-        const auto deadline = std::chrono::steady_clock::now() + kProxyResolveTimeout;
-        while (!token.stop_requested() && std::chrono::steady_clock::now() < deadline)
+        auto nextPendingLog = std::chrono::steady_clock::now() + kProxyPendingLogInterval;
+        while (!token.stop_requested())
         {
             if (!IsSTRSessionConnected())
             {
@@ -222,14 +216,20 @@ namespace
                     return true;
                 }
             }
+
+            const auto now = std::chrono::steady_clock::now();
+            if (now >= nextPendingLog)
+            {
+                Log(
+                    "E2E SESSION %u PROXY RESOLVE PENDING senderId=%llu (transport/identity healthy; waiting for STR to publish the remote player proxy)",
+                    sessionNumber,
+                    static_cast<unsigned long long>(peer));
+                nextPendingLog = now + kProxyPendingLogInterval;
+            }
+
             if (!SleepInterruptible(token, kProxyPollDelay))
                 return false;
         }
-
-        Log(
-            "E2E SESSION %u PROXY RESOLVE TIMEOUT senderId=%llu (handshake transport is healthy; inspect bridge ProxyResolver lifecycle logs)",
-            sessionNumber,
-            static_cast<unsigned long long>(g_peerConnectionID.load()));
         return false;
     }
 
@@ -366,7 +366,9 @@ namespace
             if (ackSent && g_peerAckObserved.load())
             {
                 Log("E2E SESSION %u BIDIRECTIONAL HANDSHAKE COMPLETE", sessionNumber);
-                ResolvePeerProxy(token, proxyResolver, sessionNumber);
+                if (!ResolvePeerProxy(token, proxyResolver, sessionNumber))
+                    return IsSTRSessionConnected() ? false : true;
+
                 Log("E2E SESSION %u COMPLETE; waiting for disconnect before starting a new session", sessionNumber);
                 WaitForDisconnect(token);
                 return !token.stop_requested();
@@ -399,13 +401,12 @@ namespace
             if (!SleepInterruptible(token, kApiRetryDelay))
                 return;
         }
-
         if (!api)
             return;
 
-        const auto* proxyResolver = STRPM::LoadProxyResolverFromModule(
-            L"STRPluginMessagingAPI.dll");
-        Log("public API v%u loaded; ProxyResolver=%s",
+        const auto* proxyResolver = STRPM::LoadProxyResolverFromModule(L"STRPluginMessagingAPI.dll");
+        Log(
+            "public API v%u loaded; ProxyResolver=%s",
             api->version,
             proxyResolver ? "available" : "unavailable");
         g_computerName = GetDiagnosticComputerName();
@@ -423,7 +424,10 @@ namespace
                 STRPM::ResultToString(registerResult));
             return;
         }
-        Log("registered public callback on channel '%s' for pc='%s'", kDiagnosticChannel, g_computerName.c_str());
+        Log(
+            "registered public callback on channel '%s' for pc='%s'",
+            kDiagnosticChannel,
+            g_computerName.c_str());
 
         std::uint32_t sessionNumber = 0;
         while (!token.stop_requested())
@@ -449,7 +453,7 @@ namespace
 extern "C" __declspec(dllexport) STRPMSKSE::PluginVersionData SKSEPlugin_Version =
 {
     STRPMSKSE::PluginVersionData::kVersion,
-    STRPMSKSE::kPluginVersion_0_9_0,
+    STRPMSKSE::kPluginVersion_0_9_2,
     "STRPluginMessagingDiagnostic",
     "Caelvanost",
     "",
@@ -466,7 +470,7 @@ extern "C" __declspec(dllexport) bool SKSEPlugin_Load(const SKSEInterface*)
         fopen_s(&file, "Data\\SKSE\\Plugins\\STRPluginMessagingDiagnostic.log", "w");
         if (file)
         {
-            std::fprintf(file, "STRPluginMessagingDiagnostic v0.9.0: SKSEPlugin_Load entered\n");
+            std::fprintf(file, "STRPluginMessagingDiagnostic v0.9.2: SKSEPlugin_Load entered\n");
             std::fclose(file);
         }
     }
