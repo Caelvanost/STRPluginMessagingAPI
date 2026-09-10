@@ -1,7 +1,19 @@
 #include "SKSEPluginVersionCompat.h"
 #include "STRPluginMessagingAPI/STRPluginMessagingAPI.h"
 
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #include <Windows.h>
+
+// Windows/RPC headers define the legacy macro `small` as `char`. The UI
+// suppression shadow structs intentionally use normal C++ identifiers.
+#ifdef small
+#undef small
+#endif
 
 #include <chrono>
 #include <cstdarg>
@@ -9,6 +21,7 @@
 #include <cstdio>
 #include <thread>
 
+#include "STRPMChatUiSuppressBootstrap.h"
 #include "STRPMProxyResolverBridge.h"
 #include "STRPMProxyResolverBootstrapV2.h"
 #include "STRPMProxyResolverTrace.h"
@@ -146,7 +159,7 @@ namespace
 extern "C" __declspec(dllexport) STRPMSKSE::PluginVersionData SKSEPlugin_Version =
 {
     STRPMSKSE::PluginVersionData::kVersion,
-    STRPMSKSE::kPluginVersion_0_9_1,
+    STRPMSKSE::kPluginVersion_0_9_2,
     "STRPluginMessagingBridge",
     "Caelvanost",
     "",
@@ -162,9 +175,16 @@ extern "C" __declspec(dllexport) bool SKSEPlugin_Load(const SKSEInterface*)
     fopen_s(&file, "Data\\SKSE\\Plugins\\STRPluginMessagingBridge.log", "a");
     if (file != nullptr)
     {
-        std::fprintf(file, "STRPluginMessagingBridge v0.9.1: SKSEPlugin_Load entered\n");
+        std::fprintf(file, "STRPluginMessagingBridge v0.9.2: SKSEPlugin_Load entered\n");
         std::fclose(file);
     }
+
+    // Restore the dedicated UI suppression layer used by the validated v0.6.x
+    // path. Its worker waits until the v0.9.x OnConsume receive breakpoint is
+    // armed, then installs the OverlayApp::ExecuteAsync observer in front of it.
+    // This keeps STRPM|v2| transport envelopes out of the yellow STR chat UI
+    // while leaving ordinary player chat untouched.
+    STRPMChatUiSuppressBootstrap::Start();
 
     // Keep the validated transport/proxy resolver path isolated here. v0.9.0
     // changes the receive execution model so STRPM envelope parsing and consumer
