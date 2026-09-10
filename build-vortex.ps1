@@ -1,6 +1,6 @@
 param(
     [string]$Configuration = "Release",
-    [string]$Version = "0.9.1",
+    [string]$Version = "0.9.2",
     [switch]$IncludeDiagnostic
 )
 
@@ -130,10 +130,10 @@ try {
 
     $DiagnosticEntry = "Data/SKSE/Plugins/STRPluginMessagingDiagnostic.dll"
     if ($IncludeDiagnostic -and $Entries -notcontains $DiagnosticEntry) {
-        throw "Le client diagnostic est absent du package de test v0.9.1."
+        throw "Le client diagnostic est absent du package de test v$Version."
     }
     if (-not $IncludeDiagnostic -and $Entries -contains $DiagnosticEntry) {
-        throw "Le client diagnostic ne doit pas etre inclus dans le package normal v0.9.1."
+        throw "Le client diagnostic ne doit pas etre inclus dans le package normal v$Version."
     }
 } finally {
     $Archive.Dispose()
