@@ -9,16 +9,16 @@
 #endif
 #include <Windows.h>
 
-// Windows/RPC headers define the legacy macro `small` as `char`. The UI
-// suppression shadow structs intentionally use normal C++ identifiers.
 #ifdef small
 #undef small
 #endif
 
+#include <charconv>
 #include <chrono>
 #include <cstdarg>
 #include <cstdint>
 #include <cstdio>
+#include <string_view>
 #include <thread>
 
 #include "STRPMChatUiSuppressBootstrap.h"
@@ -35,6 +35,8 @@ namespace
     constexpr auto kIdentityHeartbeatInterval = std::chrono::seconds(2);
 
     std::jthread g_identityWorker;
+    STRPM::ListenerHandle g_identityListener{};
+    bool g_identityListenerRegistered = false;
 
     void LogIdentity(const char* format, ...) noexcept
     {
@@ -49,6 +51,48 @@ namespace
         va_end(args);
         std::fputc('\n', file);
         std::fclose(file);
+    }
+
+    void STRPM_CALL ReceiveIdentityAnnouncement(const STRPM::Message* message, void*)
+    {
+        if (!message || message->sender.connectionID == 0 || !message->data || message->size == 0 || message->size > 10)
+            return;
+
+        const std::string_view payload(static_cast<const char*>(message->data), message->size);
+        std::uint32_t playerId = 0;
+        const auto parsed = std::from_chars(payload.data(), payload.data() + payload.size(), playerId);
+        if (parsed.ec != std::errc{} || parsed.ptr != payload.data() + payload.size() || playerId == 0)
+            return;
+
+        STRPMProxyResolverBridge::detail::ObserveSender(message->sender.connectionID, playerId);
+        LogIdentity(
+            "ProxyResolver identity channel observed connection=%llu playerId=%u",
+            static_cast<unsigned long long>(message->sender.connectionID),
+            static_cast<unsigned>(playerId));
+    }
+
+    bool EnsureIdentityListener() noexcept
+    {
+        if (g_identityListenerRegistered)
+            return true;
+
+        const auto* api = STRPM::LoadFromModule(L"STRPluginMessagingAPI.dll");
+        if (!api || !api->registerChannel)
+            return false;
+
+        const auto result = api->registerChannel(
+            kIdentityChannel,
+            &ReceiveIdentityAnnouncement,
+            nullptr,
+            &g_identityListener);
+        if (result == STRPM::Result::kOk)
+        {
+            g_identityListenerRegistered = true;
+            LogIdentity("ProxyResolver identity channel listener registered");
+            return true;
+        }
+
+        return false;
     }
 
     const STRPM::TransportInterface* QueryTransport() noexcept
@@ -79,16 +123,9 @@ namespace
 
         STRPM::Target target{};
         target.kind = STRPM::TargetKind::kAllPlayers;
-        constexpr std::uint32_t flags =
-            STRPM::kMessageReliable |
-            STRPM::kMessageOrdered;
+        constexpr std::uint32_t flags = STRPM::kMessageReliable | STRPM::kMessageOrdered;
 
-        return transport->send(
-            kIdentityChannel,
-            target,
-            nullptr,
-            0,
-            flags);
+        return transport->send(kIdentityChannel, target, nullptr, 0, flags);
     }
 
     bool SleepInterruptible(std::stop_token token, std::chrono::milliseconds duration)
@@ -113,6 +150,8 @@ namespace
 
         while (!token.stop_requested())
         {
+            EnsureIdentityListener();
+
             if (!STRPMProxyResolverBridge::IsSTRSessionConnected())
             {
                 announcedThisSession = false;
@@ -159,7 +198,7 @@ namespace
 extern "C" __declspec(dllexport) STRPMSKSE::PluginVersionData SKSEPlugin_Version =
 {
     STRPMSKSE::PluginVersionData::kVersion,
-    STRPMSKSE::kPluginVersion_0_9_2,
+    STRPMSKSE::kPluginVersion_0_9_3,
     "STRPluginMessagingBridge",
     "Caelvanost",
     "",
@@ -175,31 +214,19 @@ extern "C" __declspec(dllexport) bool SKSEPlugin_Load(const SKSEInterface*)
     fopen_s(&file, "Data\\SKSE\\Plugins\\STRPluginMessagingBridge.log", "a");
     if (file != nullptr)
     {
-        std::fprintf(file, "STRPluginMessagingBridge v0.9.2: SKSEPlugin_Load entered\n");
+        std::fprintf(file, "STRPluginMessagingBridge v0.9.3: SKSEPlugin_Load entered\n");
         std::fclose(file);
     }
 
-    // Restore the dedicated UI suppression layer used by the validated v0.6.x
-    // path. Its worker waits until the v0.9.x OnConsume receive breakpoint is
-    // armed, then installs the OverlayApp::ExecuteAsync observer in front of it.
-    // This keeps STRPM|v2| transport envelopes out of the yellow STR chat UI
-    // while leaving ordinary player chat untouched.
     STRPMChatUiSuppressBootstrap::Start();
-
-    // Keep the validated transport/proxy resolver path isolated here. v0.9.0
-    // changes the receive execution model so STRPM envelope parsing and consumer
-    // dispatch no longer run from the TransportService::OnConsume VEH.
     STRPMProxyResolverBootstrapV2::Start();
     STRPMProxyResolverTrace::Start();
 
-    // v0.9.1 fixes ProxyResolver's cold-start dependency on consumer traffic.
-    // The server relay authenticates every STRPM envelope with sender ConnectionID
-    // and PlayerId metadata. Emit a tiny reserved heartbeat after connection so
-    // peers can join ConnectionID -> PlayerId to the already observed
-    // PlayerId -> local proxy FormID before any consumer sends its first message.
+    // v0.9.3 keeps the raw OnConsume metadata observer as a fallback, but the
+    // primary identity path is now the reserved API channel. The server relay
+    // rewrites the zero-byte heartbeat payload with its authenticated PlayerId,
+    // so ConnectionID -> PlayerId no longer depends on VEH handler ordering.
     g_identityWorker = std::jthread(&IdentityWorker);
 
-    // Transport hooks are initialized later by STRPluginMessagingAPI through
-    // STRPM_QueryTransportInterface.
     return true;
 }
