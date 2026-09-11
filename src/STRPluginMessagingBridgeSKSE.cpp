@@ -53,6 +53,26 @@ namespace
         std::fclose(file);
     }
 
+    const STRPM::Interface* QueryMessagingApi() noexcept
+    {
+        const auto module = GetModuleHandleW(L"STRPluginMessagingAPI.dll");
+        if (!module)
+            return nullptr;
+
+        const auto raw = GetProcAddress(module, STRPM::kQueryInterfaceExportName);
+        if (!raw)
+            return nullptr;
+
+        const auto query = reinterpret_cast<STRPM::QueryInterfaceFn>(raw);
+        const STRPM::Interface* api = nullptr;
+        if (query(STRPM::kInterfaceVersion, &api) != STRPM::Result::kOk ||
+            !api || api->version != STRPM::kInterfaceVersion)
+        {
+            return nullptr;
+        }
+        return api;
+    }
+
     void STRPM_CALL ReceiveIdentityAnnouncement(const STRPM::Message* message, void*)
     {
         if (!message || message->sender.connectionID == 0 || !message->data || message->size == 0 || message->size > 10)
@@ -76,7 +96,7 @@ namespace
         if (g_identityListenerRegistered)
             return true;
 
-        const auto* api = STRPM::LoadFromModule(L"STRPluginMessagingAPI.dll");
+        const auto* api = QueryMessagingApi();
         if (!api || !api->registerChannel)
             return false;
 
