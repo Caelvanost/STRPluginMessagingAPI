@@ -4,6 +4,7 @@
 -- STRPM envelopes into STR chat and consumes the relayed envelopes.
 
 local PREFIX = "STRPM|v2|"
+local IDENTITY_CHANNEL = "strpm.identity.v1"
 local MAX_ENVELOPE_LENGTH = 4096
 local MAX_CHANNEL_LENGTH = 96
 local MAX_PARTS = 64
@@ -58,6 +59,24 @@ end
 
 local function flagIsSet(flags, flag)
   return math.floor(flags / flag) % 2 == 1
+end
+
+local function hexEncodeAscii(value)
+  return (string.gsub(value, ".", function(character)
+    return string.format("%02X", string.byte(character))
+  end))
+end
+
+local function replacePayload(envelope, payloadHex)
+  local replaced, count = string.gsub(
+    envelope,
+    "(|payload=)[0-9A-Fa-f]*",
+    "%1" .. payloadHex,
+    1)
+  if count == 1 then
+    return replaced
+  end
+  return envelope
 end
 
 local function validateEnvelope(fields)
@@ -126,8 +145,6 @@ addEventHandler("onChatMessage", function(entityId, message)
     return
   end
 
-  -- Prevent the client-originated transport envelope from being rebroadcast as
-  -- ordinary chat. STRPM explicitly performs the routing below.
   cancelEvent("STRPM transport envelope")
 
   if string.len(message) > MAX_ENVELOPE_LENGTH then
@@ -151,6 +168,15 @@ addEventHandler("onChatMessage", function(entityId, message)
   local senderConnectionId = player:GetConnectionId()
   local senderPlayerId = player:GetId()
   local flags = tonumber(fields["flags"]) or 0
+
+  -- Identity heartbeats originate with an empty payload. Replace that payload
+  -- server-side with the authenticated STR PlayerId before relaying it. Peers
+  -- can then consume ConnectionID + PlayerId through the normal deferred STRPM
+  -- receive pipeline instead of depending on VEH observer ordering.
+  if fields["channel"] == IDENTITY_CHANNEL then
+    message = replacePayload(message, hexEncodeAscii(tostring(senderPlayerId)))
+  end
+
   local relayEnvelope =
     message ..
     "|sender=" .. tostring(senderConnectionId) ..
@@ -163,4 +189,4 @@ addEventHandler("onChatMessage", function(entityId, message)
   end
 end)
 
-print("[STRPM] Chat relay v3 loaded (ProxyResolver identity metadata enabled)")
+print("[STRPM] Chat relay v4 loaded (authenticated identity payload enabled)")
