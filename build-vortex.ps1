@@ -1,6 +1,6 @@
 param(
     [string]$Configuration = "Release",
-    [string]$Version = "0.9.2",
+    [string]$Version = "0.9.3",
     [switch]$IncludeDiagnostic
 )
 
@@ -9,9 +9,9 @@ $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $Build = [System.IO.Path]::GetFullPath((Join-Path $Root "..\.build\STRPluginMessagingAPI"))
 $PackageSuffix = if ($IncludeDiagnostic) { "-test" } else { "" }
-$Stage = [System.IO.Path]::GetFullPath((Join-Path $Root "..\.package\STRPluginMessagingAPI-v$Version$PackageSuffix-Vortex"))
+$Stage = [System.IO.Path]::GetFullPath((Join-Path $Root "..\.package\STRPluginMessagingAPI-v$Version$PackageSuffix"))
 $Dist = [System.IO.Path]::GetFullPath((Join-Path $Root "dist"))
-$Zip = [System.IO.Path]::GetFullPath((Join-Path $Dist "STRPluginMessagingAPI-v$Version$PackageSuffix-Vortex.zip"))
+$Zip = [System.IO.Path]::GetFullPath((Join-Path $Dist "STRPluginMessagingAPI-v$Version$PackageSuffix.zip"))
 $Package = Join-Path $Root "package"
 $RelaySource = Join-Path $Root "extras\str-server-resources\strpm-chat-relay"
 $Ninja = "C:\Program Files\Microsoft Visual Studio\18\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\Ninja\ninja.exe"
@@ -140,7 +140,7 @@ try {
 }
 
 Write-Host ""
-Write-Host "OK - package Vortex/FOMOD cree :" -ForegroundColor Green
+Write-Host "OK - package FOMOD cree :" -ForegroundColor Green
 Write-Host $Zip
 Write-Host "FOMOD: Client + Server / Client Only / Server Files Only"
 Write-Host "Server destination: Data\SkyrimTogetherReborn\resources\strpm-chat-relay"
