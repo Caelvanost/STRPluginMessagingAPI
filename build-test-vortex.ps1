@@ -14,10 +14,10 @@ if (-not (Test-Path -LiteralPath $Builder -PathType Leaf)) {
 
 Write-Host ""
 Write-Host "============================================================" -ForegroundColor Cyan
-Write-Host " STR Plugin Messaging API v$Version - TEST Vortex Build" -ForegroundColor Cyan
+Write-Host " STR Plugin Messaging API v$Version - TEST FOMOD Build" -ForegroundColor Cyan
 Write-Host "============================================================" -ForegroundColor Cyan
 Write-Host "Diagnostic client: INCLUDED" -ForegroundColor Yellow
-Write-Host "Expected archive: STRPluginMessagingAPI-v$Version-test-Vortex.zip" -ForegroundColor Yellow
+Write-Host "Expected archive: STRPluginMessagingAPI-v$Version-test.zip" -ForegroundColor Yellow
 Write-Host ""
 
 & $Builder `
