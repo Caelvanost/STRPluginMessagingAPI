@@ -2,7 +2,7 @@
 
 Shared messaging and STR player-proxy resolution for Skyrim Together Reborn compatibility mods.
 
-Current development version: **v0.9.0**.
+Current release version: **v0.9.3**.
 
 STRPluginMessagingAPI gives SKSE mods one common layer over the **official Skyrim Together Reborn 1.8.0 connection**. It is intended for mods such as AnimSyncTogether, OStimTogether, MorphSyncTogether, IEDSyncTogether and TradeTogether so each project does not need to duplicate networking or guess which Skyrim Actor represents a remote STR player.
 
@@ -22,7 +22,36 @@ official STR 1.8.0 runtime
 official STR server + strpm-chat-relay Lua resource
 ```
 
-STRPM payloads use reserved `STRPM|v2|...` chat envelopes. The bridge intercepts those packets at `TransportService::OnConsume` before STR's normal chat dispatcher so transport packets do not appear as yellow chat messages. Ordinary STR chat remains untouched.
+STRPM payloads use reserved `STRPM|v2|...` chat envelopes. The bridge intercepts those packets before STR's normal chat UI so transport packets do not appear as yellow chat messages. Ordinary STR chat remains untouched.
+
+## v0.9.3 — authenticated identity heartbeat and validated ProxyResolver cold start
+
+v0.9.3 finalizes the ProxyResolver cold-start fix and the chat-suppression regression discovered during two-client testing.
+
+The server relay is now **v4 / 0.4.0**. For the reserved `strpm.identity.v1` heartbeat, the server replaces the empty payload with the authenticated STR `PlayerId` of the sender while retaining the authenticated sender `ConnectionID` metadata. The receiving bridge registers the reserved identity channel through the normal STRPM API and joins:
+
+```text
+ConnectionID
+    ↓ authenticated relay metadata
+PlayerId
+    ↓ STR remote-player lifecycle
+local proxy FormID
+```
+
+This removes the previous dependency on VEH handler ordering when discovering `ConnectionID -> PlayerId`.
+
+The validated two-client regression test confirmed:
+
+- Player1 resolves Player2 to the correct local dynamic proxy FormID;
+- Player2 resolves Player1 to the correct local dynamic proxy FormID;
+- both diagnostic clients complete the bidirectional handshake;
+- both diagnostic clients finish with `PROXY RESOLVE OK`;
+- identity bootstrap works before consumer traffic;
+- the server no longer prints the transient `Dropped envelope from unknown character` message during the validated test;
+- STRPM technical envelopes no longer appear as yellow chat messages;
+- ordinary STR chat remains unaffected.
+
+The dedicated OverlayApp chat UI suppression bootstrap, accidentally omitted from the v0.9.1 startup path, is active again. The identity heartbeat remains periodic, but duplicate heartbeat observations are no longer spammed into the bridge log; only first discovery or an identity change is logged.
 
 ## v0.9.0 — fixed-buffer receive capture outside the VEH
 
@@ -73,18 +102,7 @@ Important implementation properties:
 - multiple STR receive threads can reserve slots through atomic state transitions;
 - captured packets carry an atomic order number so the dispatcher processes them in capture order;
 - if the fixed queue is saturated, the packet is not suppressed and STR is allowed to process it normally rather than silently losing it;
-- the public API, `STRPM|v2|` wire format, relay v3 and ProxyResolver ABI remain unchanged.
-
-Expected v0.9.0 bridge startup diagnostics include:
-
-```text
-STRPluginMessagingBridge v0.9.0: SKSEPlugin_Load entered
-STRPM receive callback dispatcher started
-STRPM raw receive dispatcher started; VEH parsing reduced to fixed-buffer capture
-receive breakpoint armed for TransportService::OnConsume
-STRPM VEH receive path uses fixed-buffer raw capture; parsing and callbacks are deferred
-STRPM receive path resolved and armed; consumer callbacks are deferred outside STR OnConsume/VEH
-```
+- the public API and `STRPM|v2|` wire prefix remain unchanged.
 
 Consumer callbacks are still **not Skyrim's game thread**. Consumer mods must continue to schedule Skyrim object lookup, UI work and game-state mutation through their normal SKSE/game-thread path.
 
@@ -103,28 +121,7 @@ Two runtime behaviors changed:
 1. the optional diagnostic client treats each STR connection as a separate E2E session. A disconnect clears peer/ACK state and the next `OnConnected` restarts at `probe=1`;
 2. repeated internal ProxyResolver flushes no longer log `mapping ready` when `ConnectionID -> FormID` is unchanged. Public mapping events were already change-only.
 
-## ProxyResolver — validated baseline
-
-The v0.8.1 two-client runtime test validated ProxyResolver in both directions:
-
-```text
-Player1 resolving Player2:
-ConnectionID -> Elir local proxy FormID 0xFF001D44
-
-Player2 resolving Player1:
-ConnectionID -> Kahel local proxy FormID 0xFF000C81
-```
-
-Both clients also completed:
-
-```text
-E2E BIDIRECTIONAL HANDSHAKE COMPLETE
-PROXY RESOLVE OK
-```
-
-A reconnect test additionally confirmed that STR connection IDs are session-scoped and that ProxyResolver clears mappings on `OnDisconnected` before accepting the new session identity.
-
-### Resolution model
+## ProxyResolver
 
 Consumer mods must **not** scan Skyrim `ProcessLists`, compare actor names or cache guessed dynamic FormIDs. STRPM owns STR-version-specific resolution and publishes:
 
@@ -136,7 +133,7 @@ STR PlayerId
 local Skyrim proxy FormID
 ```
 
-The v3 server relay appends authenticated `sender` and `senderPlayerId` metadata. The bridge observes STR's remote-player lifecycle and joins that identity with the local proxy FormID.
+Relay v4 appends authenticated sender metadata and provides the authenticated sender PlayerId through the reserved identity heartbeat. The bridge joins that identity with the local proxy FormID observed from STR's remote-player lifecycle.
 
 ### Public API
 
@@ -173,24 +170,6 @@ A listener registered after mappings already exist receives an immediate snapsho
 
 **Important:** ProxyResolver returns a FormID, not a raw `Actor*`. Resolver callbacks can originate from an STR/bridge thread. Consumer mods should perform Skyrim object lookup/game mutations on the game thread.
 
-## Validated transport baseline
-
-The pre-v0.9.0 transport has been validated on two clients with:
-
-- Skyrim 1.6.1170 / SKSE64 2.2.6;
-- official STR 1.8.0 runtime discovery;
-- `TransportService::Send` resolution and live instance capture;
-- Player1 -> Player2 and Player2 -> Player1 delivery;
-- loopback delivery;
-- public channel registration/callback delivery;
-- authenticated sender connection ID/name metadata;
-- reserved packet consumption before STR's dispatcher;
-- no yellow STRPM technical messages;
-- normal STR chat remains visible;
-- bidirectional E2E handshake completes on both clients.
-
-v0.9.0 requires a fresh runtime regression test because the receive execution model changed substantially.
-
 ## Compatibility target
 
 ```text
@@ -209,17 +188,17 @@ SHA-256: 77f23c9c82c412252b5c4491a09d7ab4349cbc6c77992c4766882f54798cb99d
 
 ## Server resource
 
-v0.9.0 still uses relay v3. The server console must report:
+v0.9.3 uses relay **v4 / 0.4.0**. The server console must report:
 
 ```text
-[STRPM] Chat relay v3 loaded (ProxyResolver identity metadata enabled)
+[STRPM] Chat relay v4 loaded (authenticated identity payload enabled)
 ```
 
-The wire prefix remains `STRPM|v2|`; relay v3 supplies the authenticated STR PlayerId metadata required by ProxyResolver.
+The wire prefix remains `STRPM|v2|`.
 
 ## FOMOD
 
-The Vortex package contains three installation modes:
+The package contains three installation modes:
 
 ```text
 Client + Server   Recommended for the player hosting the STR server
@@ -246,10 +225,10 @@ including both `main.lua` and `strpm-chat-relay.manifest`.
 Output:
 
 ```text
-dist/STRPluginMessagingAPI-v0.9.0-Vortex.zip
+dist/STRPluginMessagingAPI-v0.9.3.zip
 ```
 
-This build intentionally excludes `STRPluginMessagingDiagnostic.dll`.
+The public release archive intentionally excludes `STRPluginMessagingDiagnostic.dll`.
 
 ### Diagnostic test package
 
@@ -266,7 +245,7 @@ build-test-vortex.bat
 Output:
 
 ```text
-dist/STRPluginMessagingAPI-v0.9.0-test-Vortex.zip
+dist/STRPluginMessagingAPI-v0.9.3-test.zip
 ```
 
 The test archive additionally contains:
@@ -283,33 +262,12 @@ Data/SKSE/Plugins/STRPluginMessagingAPI.ini
 Data/SKSE/Plugins/STRPluginMessagingBridge.dll
 ```
 
-## Runtime test for the TradeTogether freeze
-
-Keep TradeTogether unchanged at the build under test and replace only STRPM. For the current regression case, use TradeTogether `v0.9.9-strpm` on both clients and STRPluginMessagingAPI `v0.9.0` on both clients.
-
-On each client, the bridge log must begin with:
-
-```text
-STRPluginMessagingBridge v0.9.0: SKSEPlugin_Load entered
-```
-
-and later contain:
-
-```text
-STRPM raw receive dispatcher started; VEH parsing reduced to fixed-buffer capture
-STRPM VEH receive path uses fixed-buffer raw capture; parsing and callbacks are deferred
-```
-
-Then test one TradeTogether request in one direction before testing the reverse direction. If a freeze remains, collect both `TradeTogether.log` files and the receiver's `STRPluginMessagingBridge.log`.
-
 ## Remaining work
 
-- build and runtime-regression-test v0.9.0 with TradeTogether;
-- confirm MorphSyncTogether/IEDSyncTogether/AnimSyncTogether traffic remains stable under the new raw receive queue;
 - discover/report the local STR connection ID directly;
 - finalize `Host` target semantics;
 - migrate remaining consumers fully to STRPM messaging + ProxyResolver;
-- remove obsolete experimental 0.6.x UI-suppression source files after the regression cycle.
+- remove obsolete experimental UI-suppression source files after the validated 0.9.3 release cycle.
 
 ## Design rule
 
