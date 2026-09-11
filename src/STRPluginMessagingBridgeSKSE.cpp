@@ -18,8 +18,10 @@
 #include <cstdarg>
 #include <cstdint>
 #include <cstdio>
+#include <mutex>
 #include <string_view>
 #include <thread>
+#include <unordered_map>
 
 #include "STRPMChatUiSuppressBootstrap.h"
 #include "STRPMProxyResolverBridge.h"
@@ -37,6 +39,8 @@ namespace
     std::jthread g_identityWorker;
     STRPM::ListenerHandle g_identityListener{};
     bool g_identityListenerRegistered = false;
+    std::mutex g_identityObservationMutex;
+    std::unordered_map<STRPM::ConnectionID, std::uint32_t> g_identityObservations;
 
     void LogIdentity(const char* format, ...) noexcept
     {
@@ -85,10 +89,31 @@ namespace
             return;
 
         STRPMProxyResolverBridge::detail::ObserveSender(message->sender.connectionID, playerId);
-        LogIdentity(
-            "ProxyResolver identity channel observed connection=%llu playerId=%u",
-            static_cast<unsigned long long>(message->sender.connectionID),
-            static_cast<unsigned>(playerId));
+
+        bool shouldLog = false;
+        {
+            std::scoped_lock lock(g_identityObservationMutex);
+            const auto [it, inserted] = g_identityObservations.try_emplace(
+                message->sender.connectionID,
+                playerId);
+            if (inserted)
+            {
+                shouldLog = true;
+            }
+            else if (it->second != playerId)
+            {
+                it->second = playerId;
+                shouldLog = true;
+            }
+        }
+
+        if (shouldLog)
+        {
+            LogIdentity(
+                "ProxyResolver identity channel observed connection=%llu playerId=%u",
+                static_cast<unsigned long long>(message->sender.connectionID),
+                static_cast<unsigned>(playerId));
+        }
     }
 
     bool EnsureIdentityListener() noexcept
@@ -166,6 +191,7 @@ namespace
     {
         bool announcedThisSession = false;
         bool loggedWaiting = false;
+        bool identityObservationsCleared = false;
         auto nextHeartbeat = std::chrono::steady_clock::time_point{};
 
         while (!token.stop_requested())
@@ -174,6 +200,12 @@ namespace
 
             if (!STRPMProxyResolverBridge::IsSTRSessionConnected())
             {
+                if (!identityObservationsCleared)
+                {
+                    std::scoped_lock lock(g_identityObservationMutex);
+                    g_identityObservations.clear();
+                    identityObservationsCleared = true;
+                }
                 announcedThisSession = false;
                 loggedWaiting = false;
                 nextHeartbeat = {};
@@ -182,6 +214,7 @@ namespace
                 continue;
             }
 
+            identityObservationsCleared = false;
             const auto now = std::chrono::steady_clock::now();
             if (!announcedThisSession || nextHeartbeat.time_since_epoch().count() == 0 || now >= nextHeartbeat)
             {
