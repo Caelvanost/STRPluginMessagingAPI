@@ -1,5 +1,6 @@
 #include "STRPluginMessagingAPI/STRPluginMessagingAPI.h"
 #include "STRPluginMessagingBridgeReceive.h"
+#include "STRPMSTRCompatibility.h"
 
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -24,9 +25,9 @@
 
 namespace
 {
-    constexpr char kTargetBuild[] = "Skyrim Together Reborn 1.8.0";
+    constexpr const char* kTargetBuild = STRPMSTRCompatibility::kTargetBuild;
     constexpr char kSendChatAnchor[] = "Send chat message of type {}: '{}' ";
-    constexpr std::uint8_t kSendChatOpcode = 38;
+    constexpr std::uint8_t kSendChatOpcode = STRPMSTRCompatibility::kSendChatMessageRequestOpcode;
     constexpr std::uint64_t kGlobalChatMessageType = 1;
     constexpr std::size_t kMaxEnvelopeChars = 3500;
     constexpr std::size_t kMaxFragments = 64;
@@ -551,7 +552,7 @@ namespace
             if (!targetBounds)
                 continue;
 
-            // STR 1.8.0 TransportService::Send constructs Buffer(1 << 16).
+            // STR 1.8.3 TransportService::Send constructs Buffer(1 << 16).
             if (!FunctionContainsImmediate32(*targetBounds, 0x00010000u))
                 continue;
 
@@ -965,7 +966,7 @@ namespace
                 }
                 else if (!loggedSendFailure)
                 {
-                    Log("send resolver waiting for mapped STR 1.8.0 runtime");
+                    Log("send resolver waiting for mapped STR 1.8.3 runtime");
                     loggedSendFailure = true;
                 }
             }
@@ -1058,8 +1059,12 @@ namespace
             fclose(truncate);
 
         Log("STRPM bridge starting for %s", kTargetBuild);
-        Log("source tag: tiltedphoques/TiltedEvolution v1.8.0 (9c23efa422bbc1e5c06eef5522ca73971a513e35)");
-        Log("Nexus public exe SHA-256: 77f23c9c82c412252b5c4491a09d7ab4349cbc6c77992c4766882f54798cb99d");
+        Log("source tag: tiltedphoques/TiltedEvolution %s (%s)",
+            STRPMSTRCompatibility::kTargetTag,
+            STRPMSTRCompatibility::kTargetCommit);
+        Log("chat opcode profile: client=%u server=%u",
+            static_cast<unsigned>(STRPMSTRCompatibility::kSendChatMessageRequestOpcode),
+            static_cast<unsigned>(STRPMSTRCompatibility::kNotifyChatMessageBroadcastOpcode));
 
         if (!StartReceiveDispatch())
         {
