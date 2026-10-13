@@ -251,13 +251,13 @@ namespace
 extern "C" __declspec(dllexport) STRPMSKSE::PluginVersionData SKSEPlugin_Version =
 {
     STRPMSKSE::PluginVersionData::kVersion,
-    STRPMSKSE::kPluginVersion_0_9_3,
+    STRPMSKSE::kPluginVersion_0_10_0,
     "STRPluginMessagingBridge",
     "Caelvanost",
     "",
     0,
     0,
-    { STRPMSKSE::kRuntime_1_6_1170, 0 },
+    { STRPMSKSE::kRuntime_1_6_1170, STRPMSKSE::kRuntime_1_6_1179, STRPMSKSE::kRuntime_1_7_104, 0 },
     0
 };
 
@@ -267,7 +267,7 @@ extern "C" __declspec(dllexport) bool SKSEPlugin_Load(const SKSEInterface*)
     fopen_s(&file, "Data\\SKSE\\Plugins\\STRPluginMessagingBridge.log", "a");
     if (file != nullptr)
     {
-        std::fprintf(file, "STRPluginMessagingBridge v0.9.3: SKSEPlugin_Load entered\n");
+        std::fprintf(file, "STRPluginMessagingBridge v0.10.0: SKSEPlugin_Load entered\n");
         std::fclose(file);
     }
 
@@ -275,7 +275,7 @@ extern "C" __declspec(dllexport) bool SKSEPlugin_Load(const SKSEInterface*)
     STRPMProxyResolverBootstrapV2::Start();
     STRPMProxyResolverTrace::Start();
 
-    // v0.9.3 keeps the raw OnConsume metadata observer as a fallback, but the
+    // v0.10.0 keeps the raw OnConsume metadata observer as a fallback, but the
     // primary identity path is now the reserved API channel. The server relay
     // rewrites the zero-byte heartbeat payload with its authenticated PlayerId,
     // so ConnectionID -> PlayerId no longer depends on VEH handler ordering.
