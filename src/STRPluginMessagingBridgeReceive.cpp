@@ -1,4 +1,5 @@
 #include "STRPluginMessagingBridgeReceive.h"
+#include "STRPMSTRCompatibility.h"
 
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -28,12 +29,13 @@ namespace STRPMBridgeReceive
 {
     namespace
     {
-        // TransportService is declared as a struct in official STR 1.8.0.
+        // TransportService is declared as a struct in official STR 1.8.3.
         constexpr char kTransportServiceTypeName[] = ".?AUTransportService@@";
         constexpr std::string_view kEnvelopePrefix = "STRPM|v2|";
 
-        // Official TiltedEvolution v1.8.0 Code/encoding/Opcodes.h.
-        constexpr std::uint8_t kNotifyChatMessageBroadcastOpcode = 36;
+        // Official TiltedEvolution v1.8.3 Code/encoding/Opcodes.h.
+        constexpr std::uint8_t kNotifyChatMessageBroadcastOpcode =
+            STRPMSTRCompatibility::kNotifyChatMessageBroadcastOpcode;
 
         constexpr std::size_t kMaxFragments = 64;
         constexpr std::size_t kMaxPendingMessages = 128;
@@ -476,7 +478,7 @@ namespace STRPMBridgeReceive
                 std::fclose(file);
             }
 
-            // TiltedConnect Client.hpp at the exact STR 1.8.0 submodule commit:
+            // TiltedConnect Client.hpp at the exact STR 1.8.3 submodule commit:
             // virtual ~Client(); OnConsume; OnConnected; OnDisconnected; OnUpdate.
             std::uintptr_t onConsume = 0;
             if (!ReadProcessValue(
