@@ -1,6 +1,6 @@
 param(
     [string]$Configuration = "Release",
-    [string]$Version = "0.9.3",
+    [string]$Version = "0.10.0",
     [switch]$IncludeDiagnostic
 )
 
@@ -40,7 +40,7 @@ if (-not (Test-Path -LiteralPath (Join-Path $RelaySource "strpm-chat-relay.manif
     throw "Manifest du relay STRPM introuvable: $RelaySource"
 }
 
-$Command = "`"$VsDevCmd`" -arch=x64 && cmake -S `"$Root`" -B `"$Build`" -G Ninja -DCMAKE_MAKE_PROGRAM=`"$Ninja`" -DCMAKE_BUILD_TYPE=$Configuration -DSTRPM_ENABLE_UDP_BACKEND=OFF -DSTRPM_BUILD_STR180_BRIDGE_PROBE=ON && cmake --build `"$Build`" --config $Configuration"
+$Command = "`"$VsDevCmd`" -arch=x64 && cmake -S `"$Root`" -B `"$Build`" -G Ninja -DCMAKE_MAKE_PROGRAM=`"$Ninja`" -DCMAKE_BUILD_TYPE=$Configuration -DSTRPM_ENABLE_UDP_BACKEND=OFF -DSTRPM_BUILD_STR183_BRIDGE_PROBE=ON && cmake --build `"$Build`" --config $Configuration"
 cmd.exe /d /s /c $Command
 if ($LASTEXITCODE -ne 0) {
     throw "Compilation CMake echouee avec le code $LASTEXITCODE."
@@ -84,7 +84,7 @@ if ($IncludeDiagnostic) {
 
 # Server payload is deliberately staged outside Data. The FOMOD maps this
 # source folder into Data\SkyrimTogetherReborn, so "Client Only" does not
-# accidentally deploy server files. STR 1.8.0 loads resources from its
+# accidentally deploy server files. STR 1.8.3 loads resources from its
 # working-directory "resources" folder.
 $ServerResourcesRoot = Join-Path $Stage "Server\SkyrimTogetherReborn\resources"
 New-Item -ItemType Directory -Force -Path $ServerResourcesRoot | Out-Null
