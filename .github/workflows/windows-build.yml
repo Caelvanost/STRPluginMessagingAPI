@@ -17,7 +17,7 @@ jobs:
         run: >-
           cmake -S . -B build -A x64
           -DSTRPM_ENABLE_UDP_BACKEND=OFF
-          -DSTRPM_BUILD_STR180_BRIDGE_PROBE=ON
+          -DSTRPM_BUILD_STR183_BRIDGE_PROBE=ON
 
       - name: Build
         run: cmake --build build --config Release --parallel
@@ -46,7 +46,7 @@ jobs:
         shell: pwsh
         run: |
           $root = "artifact-release"
-          $zip = "STRPluginMessagingAPI-v0.9.3.zip"
+          $zip = "STRPluginMessagingAPI-v0.10.0.zip"
           $pluginDir = "$root/Data/SKSE/Plugins"
           $serverResources = "$root/Server/SkyrimTogetherReborn/resources"
           New-Item -ItemType Directory -Force -Path $pluginDir | Out-Null
@@ -97,5 +97,5 @@ jobs:
       - name: Upload release package
         uses: actions/upload-artifact@v4
         with:
-          name: STRPluginMessagingAPI-v0.9.3
-          path: STRPluginMessagingAPI-v0.9.3.zip
+          name: STRPluginMessagingAPI-v0.10.0
+          path: STRPluginMessagingAPI-v0.10.0.zip
