@@ -21,9 +21,10 @@ namespace STRPMSKSE
         std::uint32_t seVersionRequired;
     };
 
-    // Runtime reported by the user's SKSE 2.2.6 log:
-    // 0x01064920 == SkyrimSE.exe 1.6.1170.
+    // SKSE runtime version encoding: major.minor.patch.build.
     inline constexpr std::uint32_t kRuntime_1_6_1170 = 0x01064920;
+    inline constexpr std::uint32_t kRuntime_1_6_1179 = 0x010649B0;
+    inline constexpr std::uint32_t kRuntime_1_7_104 = 0x01070680;
 
     inline constexpr std::uint32_t kPluginVersion_0_5_1 = 0x00050001;
     inline constexpr std::uint32_t kPluginVersion_0_6_0 = 0x00060000;
@@ -40,4 +41,5 @@ namespace STRPMSKSE
     inline constexpr std::uint32_t kPluginVersion_0_9_1 = 0x00090001;
     inline constexpr std::uint32_t kPluginVersion_0_9_2 = 0x00090002;
     inline constexpr std::uint32_t kPluginVersion_0_9_3 = 0x00090003;
+    inline constexpr std::uint32_t kPluginVersion_0_10_0 = 0x000A0000;
 }
