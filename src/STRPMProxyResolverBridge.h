@@ -1,6 +1,7 @@
 #pragma once
 
 #include "STRPluginMessagingAPI/STRPluginMessagingAPI.h"
+#include "STRPMSTRCompatibility.h"
 
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -31,7 +32,8 @@ namespace STRPMProxyResolverBridge
     {
         constexpr char kTransportServiceTypeName[] = ".?AUTransportService@@";
         constexpr std::string_view kEnvelopePrefix = "STRPM|v2|";
-        constexpr std::uint8_t kNotifyChatMessageBroadcastOpcode = 36;
+        constexpr std::uint8_t kNotifyChatMessageBroadcastOpcode =
+            STRPMSTRCompatibility::kNotifyChatMessageBroadcastOpcode;
         constexpr std::size_t kChunkBytes = 1u * 1024u * 1024u;
         constexpr std::size_t kMaxPacketBytes = 256u * 1024u;
         constexpr std::uint32_t kMaxPlausiblePlayerId = 1'000'000u;
@@ -1111,7 +1113,7 @@ namespace STRPMProxyResolverBridge
 
                 if (!loggedWaiting)
                 {
-                    Log("ProxyResolver waiting for mapped STR 1.8.0 lifecycle functions");
+                    Log("ProxyResolver waiting for mapped STR 1.8.3 lifecycle functions");
                     loggedWaiting = true;
                 }
                 if (!SleepInterruptible(token, std::chrono::seconds(2)))
