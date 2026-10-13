@@ -2,9 +2,9 @@
 
 Shared messaging and STR player-proxy resolution for Skyrim Together Reborn compatibility mods.
 
-Current release version: **v0.9.3**.
+Current development version: **v0.10.0**.
 
-STRPluginMessagingAPI gives SKSE mods one common layer over the **official Skyrim Together Reborn 1.8.0 connection**. It is intended for mods such as AnimSyncTogether, OStimTogether, MorphSyncTogether, IEDSyncTogether and TradeTogether so each project does not need to duplicate networking or guess which Skyrim Actor represents a remote STR player.
+STRPluginMessagingAPI gives SKSE mods one common layer over the **Skyrim Together Reborn 1.8.3 connection**. It is intended for mods such as AnimSyncTogether, OStimTogether, MorphSyncTogether, IEDSyncTogether and TradeTogether so each project does not need to duplicate networking or guess which Skyrim Actor represents a remote STR player.
 
 ## Architecture
 
@@ -17,12 +17,36 @@ STRPluginMessagingAPI.dll
     ↓
 STRPluginMessagingBridge.dll
     ↓
-official STR 1.8.0 runtime
+STR 1.8.3 runtime
     ↓
 official STR server + strpm-chat-relay Lua resource
 ```
 
 STRPM payloads use reserved `STRPM|v2|...` chat envelopes. The bridge intercepts those packets before STR's normal chat UI so transport packets do not appear as yellow chat messages. Ordinary STR chat remains untouched.
+
+## v0.10.0 — Skyrim Together Reborn 1.8.3 compatibility
+
+v0.10.0 retargets the native bridge from STR 1.8.0 to **STR 1.8.3**.
+
+TiltedEvolution removed one client opcode and one server opcode between 1.8.0 and 1.8.3. The chat message classes and `TransportService` ABI used by STRPM are otherwise unchanged, but the numeric chat opcodes moved:
+
+```text
+SendChatMessageRequest:       38 -> 37
+NotifyChatMessageBroadcast:   36 -> 35
+```
+
+Those STR-version-specific values are now centralized in `STRPMSTRCompatibility.h` so future STR updates do not require duplicated edits across the send bridge, receive bridge and ProxyResolver metadata observer.
+
+STRPM 0.10.0 SKSE metadata allows these Skyrim runtimes:
+
+```text
+1.6.1170
+1.6.1179
+1.7.104
+```
+
+This means the STRPM DLLs themselves can load on all three runtimes. **It does not make the official STR 1.8.3 client support older Skyrim builds.** The official STR 1.8.3 source currently accepts Skyrim `1.7.104.0`; using STR 1.8.3 on 1.6.1170 or 1.6.1179 requires a separately compatible/backported STR client and must be runtime-tested before being declared supported.
+
 
 ## v0.9.3 — authenticated identity heartbeat and validated ProxyResolver cold start
 
@@ -173,22 +197,19 @@ A listener registered after mappings already exist receives an immediate snapsho
 ## Compatibility target
 
 ```text
-Skyrim Together Reborn: 1.8.0
-TiltedEvolution tag:    v1.8.0
-TiltedEvolution commit: 9c23efa422bbc1e5c06eef5522ca73971a513e35
-TiltedConnect commit:   c20165c35c4d024bb456430eeb0abb554e34c7f4
+Skyrim Together Reborn: 1.8.3
+TiltedEvolution tag:    v1.8.3
+TiltedEvolution commit: 4917189f6ac382e874f9ee735c4fef6a350e449e
+TiltedConnect commit:   293fab99288b7414bd129ace25ae018114cefb2a
+Client chat opcode:     37
+Server chat opcode:     35
 ```
 
-Official Nexus executable used for runtime validation:
-
-```text
-Size:    7,058,432 bytes
-SHA-256: 77f23c9c82c412252b5c4491a09d7ab4349cbc6c77992c4766882f54798cb99d
-```
+The official STR 1.8.3 client currently targets Skyrim 1.7.104.0. STRPM also declares SKSE compatibility with 1.6.1170 and 1.6.1179 so those runtimes can be tested with a compatible STR build.
 
 ## Server resource
 
-v0.9.3 uses relay **v4 / 0.4.0**. The server console must report:
+v0.10.0 continues to use relay **v4 / 0.4.0**. The server console must report:
 
 ```text
 [STRPM] Chat relay v4 loaded (authenticated identity payload enabled)
@@ -225,7 +246,7 @@ including both `main.lua` and `strpm-chat-relay.manifest`.
 Output:
 
 ```text
-dist/STRPluginMessagingAPI-v0.9.3.zip
+dist/STRPluginMessagingAPI-v0.10.0.zip
 ```
 
 The public release archive intentionally excludes `STRPluginMessagingDiagnostic.dll`.
@@ -245,7 +266,7 @@ build-test-vortex.bat
 Output:
 
 ```text
-dist/STRPluginMessagingAPI-v0.9.3-test.zip
+dist/STRPluginMessagingAPI-v0.10.0-test.zip
 ```
 
 The test archive additionally contains:
@@ -264,6 +285,8 @@ Data/SKSE/Plugins/STRPluginMessagingBridge.dll
 
 ## Remaining work
 
+- runtime-test STRPM 0.10.0 against official STR 1.8.3 on Skyrim 1.7.104;
+- validate Skyrim 1.6.1170 and 1.6.1179 with a compatible/backported STR 1.8.3 client before declaring those combinations supported;
 - discover/report the local STR connection ID directly;
 - finalize `Host` target semantics;
 - migrate remaining consumers fully to STRPM messaging + ProxyResolver;
