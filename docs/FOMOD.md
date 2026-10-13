@@ -34,7 +34,7 @@ Use this when updating or repairing the server resource without reinstalling the
 
 ## Why this path is correct
 
-STR 1.8.0's server resource loader uses a `resources` directory relative to the server process working directory. The standard STR archive places the server under `Data/SkyrimTogetherReborn`, therefore the FOMOD destination is:
+STR 1.8.3's server resource loader uses a `resources` directory relative to the server process working directory. The standard STR archive places the server under `Data/SkyrimTogetherReborn`, therefore the FOMOD destination is:
 
 ```text
 Data/SkyrimTogetherReborn/resources/strpm-chat-relay
