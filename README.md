@@ -45,7 +45,17 @@ STRPM 0.10.0 SKSE metadata allows these Skyrim runtimes:
 1.7.104
 ```
 
-This means the STRPM DLLs themselves can load on all three runtimes. **It does not make the official STR 1.8.3 client support older Skyrim builds.** The official STR 1.8.3 source currently accepts Skyrim `1.7.104.0`; using STR 1.8.3 on 1.6.1170 or 1.6.1179 requires a separately compatible/backported STR client and must be runtime-tested before being declared supported.
+The STRPM DLLs themselves can load on all three runtimes. Skyrim Together Reborn 1.8.3 also provides an official optional client build for the Skyrim 1.6.x branch. STRPM 0.10.0 has been runtime-validated with that STR 1.8.3 build on **Skyrim 1.6.1170 + SKSE 2.2.8** using two connected clients.
+
+Validated on 1.6.1170:
+- both players connected successfully;
+- native send and receive hooks resolved;
+- bidirectional E2E messaging completed;
+- ProxyResolver resolved both remote player proxies;
+- STRPM transport packets were suppressed from the yellow STR chat UI;
+- no STRPM-related crash or connection instability was observed during the validation session.
+
+Skyrim 1.6.1179 remains accepted by STRPM metadata but has **not** been runtime-tested by this project.
 
 
 ## v0.9.3 — authenticated identity heartbeat and validated ProxyResolver cold start
@@ -205,7 +215,7 @@ Client chat opcode:     37
 Server chat opcode:     35
 ```
 
-The official STR 1.8.3 client currently targets Skyrim 1.7.104.0. STRPM also declares SKSE compatibility with 1.6.1170 and 1.6.1179 so those runtimes can be tested with a compatible STR build.
+Validated runtime profile for this branch: **Skyrim 1.6.1170 + SKSE 2.2.8 + Skyrim Together Reborn 1.8.3 optional 1.6.x client build**. STRPM metadata also accepts 1.6.1179 and 1.7.104, but those combinations are not part of this branch's completed runtime validation.
 
 ## Server resource
 
@@ -285,8 +295,8 @@ Data/SKSE/Plugins/STRPluginMessagingBridge.dll
 
 ## Remaining work
 
-- runtime-test STRPM 0.10.0 against official STR 1.8.3 on Skyrim 1.7.104;
-- validate Skyrim 1.6.1170 and 1.6.1179 with a compatible/backported STR 1.8.3 client before declaring those combinations supported;
+- runtime-test STRPM 0.10.0 against STR 1.8.3 on Skyrim 1.7.104;
+- runtime-test Skyrim 1.6.1179 when a suitable test environment is available;
 - discover/report the local STR connection ID directly;
 - finalize `Host` target semantics;
 - migrate remaining consumers fully to STRPM messaging + ProxyResolver;
