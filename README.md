@@ -26,7 +26,7 @@ STRPM payloads use reserved `STRPM|v2|...` chat envelopes. The bridge intercepts
 
 ## v0.10.1 — Skyrim Together Reborn 1.8.4 compatibility
 
-v0.10.1 retargets the 1.6.1170 development branch to **Skyrim Together Reborn 1.8.4**.
+v0.10.1 targets **Skyrim Together Reborn 1.8.4** on both supported STRPM runtime profiles. This `1.7-dev` branch carries the **Skyrim 1.7.104** package while keeping the same STRPM version number as the validated 1.6.1170 package.
 
 The public chat protocol itself did not change between STR 1.8.3 and 1.8.4:
 
@@ -51,23 +51,16 @@ Send(const ClientMessage& message, EPacketFlags flags = kReliable)
 
 STRPM calls this native function directly, so v0.10.1 now passes `kReliable` explicitly. In the STR 1.8.4 TiltedConnect revision, `kReliable` is enum value `0`.
 
-The official STR 1.8.4 optional package supports Skyrim **1.6.1170 / 1.6.1179**. The development/runtime validation target for this branch is:
+The runtime target for this branch is:
 
 ```text
-Skyrim SE:              1.6.1170
-SKSE:                   2.2.8 (local test environment)
-Skyrim Together Reborn: 1.8.4 optional 1.6.x build
+Skyrim SE:              1.7.104
+SKSE:                   2.3.1
+Skyrim Together Reborn: 1.8.4
 STRPM:                   0.10.1-test
 ```
 
-This profile is now **runtime-validated** on two clients with Skyrim 1.6.1170 + SKSE 2.2.8 + STR 1.8.4. The validation session confirmed:
-
-- both clients resolved and captured the STR 1.8.4 `TransportService::Send` path;
-- native send and receive hooks armed successfully;
-- bidirectional E2E messaging completed;
-- ProxyResolver resolved the remote player proxy correctly in both directions;
-- STRPM transport packets remained suppressed from the yellow STR chat UI;
-- no STRPM-related crash or connection instability was observed during the validation session.
+The same v0.10.1 codebase is already runtime-validated on Skyrim 1.6.1170 + SKSE 2.2.8 + STR 1.8.4. The 1.7.104 package keeps the validated STR 1.8.4 transport fix, including the explicit `kReliable` argument to `TransportService::Send`, but this runtime profile is **source-audited and not yet runtime-validated**. Two-client E2E, ProxyResolver and chat-suppression tests must pass before the 1.7.104 package is marked validated.
 
 ## v0.10.0 — Skyrim Together Reborn 1.8.3 compatibility
 
@@ -252,7 +245,8 @@ A listener registered after mappings already exist receives an immediate snapsho
 ## Compatibility target
 
 ```text
-Skyrim:                 1.6.1170
+Skyrim:                 1.7.104
+SKSE:                   2.3.1
 Skyrim Together Reborn: 1.8.4
 TiltedEvolution tag:    v1.8.4
 TiltedEvolution commit: 54b3a858e228dc8807ed65bc3f9ac3c3f81b610d
@@ -262,7 +256,7 @@ Server chat opcode:     35
 Transport Send flags:   kReliable = 0
 ```
 
-The current **STR 1.8.4 + Skyrim 1.6.1170 + SKSE 2.2.8** profile is runtime-validated in v0.10.1. The previous STR 1.8.3 profile remains the validated baseline for v0.10.0.
+This `1.7-dev` profile uses the same STRPM **v0.10.1** API and wire protocol as the validated Skyrim 1.6.1170 build. Only the SKSE runtime metadata and package identity are runtime-specific.
 
 ## Server resource
 
@@ -303,7 +297,7 @@ including both `main.lua` and `strpm-chat-relay.manifest`.
 Output:
 
 ```text
-dist/STRPluginMessagingAPI-v0.10.1.zip
+dist/STRPluginMessagingAPI-v0.10.1-Skyrim-1.7.104.zip
 ```
 
 The public release archive intentionally excludes `STRPluginMessagingDiagnostic.dll`.
@@ -323,7 +317,7 @@ build-test-vortex.bat
 Output:
 
 ```text
-dist/STRPluginMessagingAPI-v0.10.1-test.zip
+dist/STRPluginMessagingAPI-v0.10.1-Skyrim-1.7.104-test.zip
 ```
 
 The test archive additionally contains:
@@ -342,6 +336,8 @@ Data/SKSE/Plugins/STRPluginMessagingBridge.dll
 
 ## Remaining work
 
+- runtime-test STRPM 0.10.1 on Skyrim 1.7.104 + SKSE 2.3.1 + STR 1.8.4;
+- validate bidirectional E2E messaging, ProxyResolver mappings and yellow-chat suppression on two clients;
 - runtime-test Skyrim 1.6.1179 when a suitable test environment is available;
 - discover/report the local STR connection ID directly;
 - finalize `Host` target semantics;
