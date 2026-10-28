@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.21)
 
 project(
     STRPluginMessagingAPI
-    VERSION 0.10.0
+    VERSION 0.10.1
     LANGUAGES CXX
 )
 
@@ -13,8 +13,8 @@ option(
 )
 
 option(
-    STRPM_BUILD_STR183_BRIDGE_PROBE
-    "Build the Skyrim Together Reborn 1.8.3 chat bridge"
+    STRPM_BUILD_STR184_BRIDGE_PROBE
+    "Build the Skyrim Together Reborn 1.8.4 chat bridge"
     ON
 )
 
@@ -71,17 +71,17 @@ set_target_properties(STRPluginMessagingAPIRuntime
         OUTPUT_NAME STRPluginMessagingAPI
 )
 
-if(STRPM_BUILD_STR183_BRIDGE_PROBE)
+if(STRPM_BUILD_STR184_BRIDGE_PROBE)
     set(STRPM_BRIDGE_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/src/STRPluginMessagingBridge.cpp")
 
-    # STR 1.8.3 unpacks/remaps private runtime regions while Skyrim is starting.
+    # STR 1.8.4 unpacks/remaps private runtime regions while Skyrim is starting.
     # Never scan those mappings in-place. For MSVC builds, generate a resolver
     # variant that snapshots memory through ReadProcessMemory in bounded chunks
     # and parses only local bytes.
     if(MSVC)
         file(READ "${STRPM_BRIDGE_SOURCE}" STRPM_BRIDGE_SOURCE_TEXT)
 
-        # The official v1.8.3 OverlayClient source logs the chat anchor with a
+        # The official v1.8.4 OverlayClient source logs the chat anchor with a
         # wide literal (L"..."). v0.4.8 incorrectly searched the narrow ASCII
         # bytes, which can never match the public runtime. Generate the probe with
         # the exact UTF-16 anchor and exclude the wchar_t terminator correctly.
@@ -312,7 +312,7 @@ if(STRPM_BUILD_STR183_BRIDGE_PROBE)
 
         set(STRPM_FAILURE_BLOCK [=[                else if (!loggedSendFailure)
                 {
-                    Log("send resolver waiting for mapped STR 1.8.3 runtime");
+                    Log("send resolver waiting for mapped STR 1.8.4 runtime");
                     loggedSendFailure = true;
                 }]=])
         set(STRPM_DIAGNOSTIC_FAILURE_BLOCK [=[                else
@@ -327,7 +327,7 @@ if(STRPM_BUILD_STR183_BRIDGE_PROBE)
                     {
                         Log("send resolver diagnostic snapshot after failed pass:");
                         LogResolverDetails();
-                        Log("send resolver pass failed in %llu ms; waiting for mapped STR 1.8.3 runtime",
+                        Log("send resolver pass failed in %llu ms; waiting for mapped STR 1.8.4 runtime",
                             static_cast<unsigned long long>(resolverFailedAt - resolverStartedAt));
                         lastResolverDiagnosticAt = resolverFailedAt;
                     }
@@ -414,7 +414,7 @@ if(MSVC)
             /EHsc
             /FI${CMAKE_CURRENT_SOURCE_DIR}/src/STRPMDiagnosticLogRedirect.h
     )
-    if(STRPM_BUILD_STR183_BRIDGE_PROBE)
+    if(STRPM_BUILD_STR184_BRIDGE_PROBE)
         target_compile_options(STRPluginMessagingBridge
             PRIVATE
                 /W4
@@ -427,7 +427,7 @@ else()
     target_compile_options(STRPluginMessagingAPIClient PRIVATE -Wall -Wextra -Wpedantic)
     target_compile_options(STRPluginMessagingAPIRuntime PRIVATE -Wall -Wextra -Wpedantic)
     target_compile_options(STRPluginMessagingDiagnostic PRIVATE -Wall -Wextra -Wpedantic)
-    if(STRPM_BUILD_STR183_BRIDGE_PROBE)
+    if(STRPM_BUILD_STR184_BRIDGE_PROBE)
         target_compile_options(STRPluginMessagingBridge PRIVATE -Wall -Wextra -Wpedantic)
     endif()
 endif()
