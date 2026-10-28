@@ -1,36 +1,56 @@
 # STRPM FOMOD installation
 
-STRPluginMessagingAPI v0.8.1 ships as a single Vortex/FOMOD archive containing both the SKSE client and the official STR server resource.
+STRPluginMessagingAPI v0.10.1 ships as a single Vortex/FOMOD archive containing both supported Skyrim runtime variants plus the shared STR server resource.
 
-## Installation types
+## Installation flow
 
-### Client + Server — recommended for the host
+### 1. Installation Type
 
-Installs:
+Choose one:
+
+```text
+Client + Server
+Client Only
+Server Files Only
+```
+
+`Client + Server` is recommended for the player hosting the Skyrim Together Reborn server.
+
+### 2. Skyrim Runtime
+
+This step is shown only when client files are being installed.
+
+Choose the runtime that matches `SkyrimSE.exe`:
+
+```text
+Skyrim 1.6.1170
+Skyrim 1.7.104
+```
+
+The archive contains dedicated SKSE DLL variants for both runtimes, compiled from the same STRPM v0.10.1 source. The selected runtime installs:
 
 ```text
 Data/SKSE/Plugins/STRPluginMessagingAPI.dll
 Data/SKSE/Plugins/STRPluginMessagingBridge.dll
 Data/SKSE/Plugins/STRPluginMessagingAPI.ini
+```
+
+The `-test` package additionally installs the matching:
+
+```text
+Data/SKSE/Plugins/STRPluginMessagingDiagnostic.dll
+```
+
+## Server files
+
+When server files are selected, the FOMOD installs:
+
+```text
 Data/SkyrimTogetherReborn/resources/strpm-chat-relay/main.lua
 Data/SkyrimTogetherReborn/resources/strpm-chat-relay/strpm-chat-relay.manifest
 ```
 
-The `-test` package additionally installs `STRPluginMessagingDiagnostic.dll` with the client payload.
-
-### Client Only
-
-Installs only the SKSE client files. Use this on players that connect to a STR server hosted elsewhere.
-
-### Server Files Only
-
-Installs only:
-
-```text
-Data/SkyrimTogetherReborn/resources/strpm-chat-relay/
-```
-
-Use this when updating or repairing the server resource without reinstalling the SKSE client components.
+The server relay is shared by the Skyrim 1.6.1170 and 1.7.104 client variants.
 
 ## Why this path is correct
 
@@ -40,10 +60,8 @@ STR 1.8.4's server resource loader uses a `resources` directory relative to the 
 Data/SkyrimTogetherReborn/resources/strpm-chat-relay
 ```
 
-The server resource contains both its Lua entry point and its `.manifest`, so no manual copy step is required when using the standard STR layout.
-
 After starting the server, verify:
 
 ```text
-[STRPM] Chat relay v3 loaded (ProxyResolver identity metadata enabled)
+[STRPM] Chat relay v4 loaded (authenticated identity payload enabled)
 ```
