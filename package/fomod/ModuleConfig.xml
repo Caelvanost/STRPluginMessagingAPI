@@ -1,35 +1,73 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <config xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://qconsulting.ca/fo3/ModConfig5.0.xsd">
   <moduleName>STR Plugin Messaging API</moduleName>
+
   <installSteps order="Explicit">
     <installStep name="Installation Type">
       <optionalFileGroups order="Explicit">
         <group name="Choose where STRPM should be installed" type="SelectExactlyOne">
           <plugins order="Explicit">
             <plugin name="Client + Server">
-              <description>Recommended for the player hosting the Skyrim Together Reborn server. Installs the STRPM SKSE client components and the STRPM server relay into Data\SkyrimTogetherReborn\resources.</description>
-              <files>
-                <folder source="Data\SKSE\Plugins" destination="SKSE\Plugins" priority="0" />
-                <folder source="Server\SkyrimTogetherReborn" destination="SkyrimTogetherReborn" priority="0" />
-              </files>
+              <description>Recommended for the player hosting the Skyrim Together Reborn server. Installs the STRPM client DLLs for your selected Skyrim runtime and the STRPM server relay.</description>
+              <conditionFlags>
+                <flag name="STRPM_InstallClient">Yes</flag>
+                <flag name="STRPM_InstallServer">Yes</flag>
+              </conditionFlags>
               <typeDescriptor>
                 <type name="Recommended" />
               </typeDescriptor>
             </plugin>
+
             <plugin name="Client Only">
-              <description>For players joining a server hosted elsewhere. Installs only the STRPM SKSE client components.</description>
-              <files>
-                <folder source="Data\SKSE\Plugins" destination="SKSE\Plugins" priority="0" />
-              </files>
+              <description>For players joining a server hosted elsewhere. Installs only the STRPM client DLLs for your selected Skyrim runtime.</description>
+              <conditionFlags>
+                <flag name="STRPM_InstallClient">Yes</flag>
+                <flag name="STRPM_InstallServer">No</flag>
+              </conditionFlags>
               <typeDescriptor>
                 <type name="Optional" />
               </typeDescriptor>
             </plugin>
+
             <plugin name="Server Files Only">
-              <description>Installs only the STRPM server relay into Data\SkyrimTogetherReborn\resources. Use this when the client components are already installed separately.</description>
-              <files>
-                <folder source="Server\SkyrimTogetherReborn" destination="SkyrimTogetherReborn" priority="0" />
-              </files>
+              <description>Installs only the STRPM server relay. No SKSE client DLLs are installed.</description>
+              <conditionFlags>
+                <flag name="STRPM_InstallClient">No</flag>
+                <flag name="STRPM_InstallServer">Yes</flag>
+              </conditionFlags>
+              <typeDescriptor>
+                <type name="Optional" />
+              </typeDescriptor>
+            </plugin>
+          </plugins>
+        </group>
+      </optionalFileGroups>
+    </installStep>
+
+    <installStep name="Skyrim Runtime">
+      <visible>
+        <dependencies operator="And">
+          <flagDependency flag="STRPM_InstallClient" value="Yes" />
+        </dependencies>
+      </visible>
+      <optionalFileGroups order="Explicit">
+        <group name="Choose your Skyrim executable version" type="SelectExactlyOne">
+          <plugins order="Explicit">
+            <plugin name="Skyrim 1.6.1170">
+              <description>Use this for Skyrim Special Edition runtime 1.6.1170. This profile is validated with Skyrim Together Reborn 1.8.4.</description>
+              <conditionFlags>
+                <flag name="STRPM_Runtime">1.6.1170</flag>
+              </conditionFlags>
+              <typeDescriptor>
+                <type name="Recommended" />
+              </typeDescriptor>
+            </plugin>
+
+            <plugin name="Skyrim 1.7.104">
+              <description>Use this for Skyrim Special Edition runtime 1.7.104 with Skyrim Together Reborn 1.8.4. This profile requires runtime validation before release.</description>
+              <conditionFlags>
+                <flag name="STRPM_Runtime">1.7.104</flag>
+              </conditionFlags>
               <typeDescriptor>
                 <type name="Optional" />
               </typeDescriptor>
@@ -39,4 +77,39 @@
       </optionalFileGroups>
     </installStep>
   </installSteps>
+
+  <conditionalFileInstalls>
+    <patterns>
+      <pattern>
+        <dependencies operator="And">
+          <flagDependency flag="STRPM_InstallClient" value="Yes" />
+          <flagDependency flag="STRPM_Runtime" value="1.6.1170" />
+        </dependencies>
+        <files>
+          <folder source="Runtime\Skyrim-1.6.1170\SKSE\Plugins" destination="SKSE\Plugins" priority="0" />
+          <file source="Common\SKSE\Plugins\STRPluginMessagingAPI.ini" destination="SKSE\Plugins\STRPluginMessagingAPI.ini" priority="0" />
+        </files>
+      </pattern>
+
+      <pattern>
+        <dependencies operator="And">
+          <flagDependency flag="STRPM_InstallClient" value="Yes" />
+          <flagDependency flag="STRPM_Runtime" value="1.7.104" />
+        </dependencies>
+        <files>
+          <folder source="Runtime\Skyrim-1.7.104\SKSE\Plugins" destination="SKSE\Plugins" priority="0" />
+          <file source="Common\SKSE\Plugins\STRPluginMessagingAPI.ini" destination="SKSE\Plugins\STRPluginMessagingAPI.ini" priority="0" />
+        </files>
+      </pattern>
+
+      <pattern>
+        <dependencies operator="And">
+          <flagDependency flag="STRPM_InstallServer" value="Yes" />
+        </dependencies>
+        <files>
+          <folder source="Server\SkyrimTogetherReborn" destination="SkyrimTogetherReborn" priority="0" />
+        </files>
+      </pattern>
+    </patterns>
+  </conditionalFileInstalls>
 </config>
