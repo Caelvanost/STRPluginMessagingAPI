@@ -2,7 +2,7 @@ name: Windows build
 
 on:
   push:
-    branches: [main, dev]
+    branches: [main, dev, 1.7-dev]
   pull_request:
   workflow_dispatch:
 
@@ -46,7 +46,7 @@ jobs:
         shell: pwsh
         run: |
           $root = "artifact-release"
-          $zip = "STRPluginMessagingAPI-v0.10.1.zip"
+          $zip = "STRPluginMessagingAPI-v0.10.1-Skyrim-1.7.104.zip"
           $pluginDir = "$root/Data/SKSE/Plugins"
           $serverResources = "$root/Server/SkyrimTogetherReborn/resources"
           New-Item -ItemType Directory -Force -Path $pluginDir | Out-Null
@@ -97,5 +97,5 @@ jobs:
       - name: Upload release package
         uses: actions/upload-artifact@v4
         with:
-          name: STRPluginMessagingAPI-v0.10.1
-          path: STRPluginMessagingAPI-v0.10.1.zip
+          name: STRPluginMessagingAPI-v0.10.1-Skyrim-1.7.104
+          path: STRPluginMessagingAPI-v0.10.1-Skyrim-1.7.104.zip
