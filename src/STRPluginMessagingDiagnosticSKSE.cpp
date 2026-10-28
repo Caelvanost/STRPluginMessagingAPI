@@ -1,5 +1,6 @@
 #include "STRPluginMessagingAPI/STRPluginMessagingAPI.h"
 #include "SKSEPluginVersionCompat.h"
+#include "STRPMSKSERuntimeProfile.h"
 
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -459,7 +460,7 @@ extern "C" __declspec(dllexport) STRPMSKSE::PluginVersionData SKSEPlugin_Version
     "",
     0,
     0,
-    { STRPMSKSE::kRuntime_1_7_104, 0 },
+    STRPM_SKSE_COMPATIBLE_VERSION_LIST,
     0
 };
 
