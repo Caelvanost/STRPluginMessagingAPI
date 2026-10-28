@@ -4,13 +4,15 @@
 
 namespace STRPMSTRCompatibility
 {
-    inline constexpr char kTargetBuild[] = "Skyrim Together Reborn 1.8.3";
-    inline constexpr char kTargetTag[] = "v1.8.3";
-    inline constexpr char kTargetCommit[] = "4917189f6ac382e874f9ee735c4fef6a350e449e";
+    inline constexpr char kTargetBuild[] = "Skyrim Together Reborn 1.8.4";
+    inline constexpr char kTargetTag[] = "v1.8.4";
+    inline constexpr char kTargetCommit[] = "54b3a858e228dc8807ed65bc3f9ac3c3f81b610d";
 
-    // TiltedEvolution v1.8.3 removed kCancelAssignmentRequest from ClientOpcode
-    // and kNotifySpawnData from ServerOpcode. The chat opcodes therefore moved
-    // down by one compared with the STR 1.8.0 profile used by STRPM 0.9.x.
+    // STR 1.8.4 keeps the chat opcode numbering introduced in STR 1.8.3.
     inline constexpr std::uint8_t kSendChatMessageRequestOpcode = 37;
     inline constexpr std::uint8_t kNotifyChatMessageBroadcastOpcode = 35;
+
+    // TiltedConnect EPacketFlags::kReliable. STR 1.8.4 added this explicit
+    // TransportService::Send parameter; it is the first enum value, therefore 0.
+    inline constexpr int kReliablePacketFlag = 0;
 }
