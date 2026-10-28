@@ -1,4 +1,5 @@
 #include "SKSEPluginVersionCompat.h"
+#include "STRPMSKSERuntimeProfile.h"
 #include "STRPMProxyResolverRuntime.h"
 
 extern "C" __declspec(dllexport) STRPMSKSE::PluginVersionData SKSEPlugin_Version =
@@ -10,6 +11,6 @@ extern "C" __declspec(dllexport) STRPMSKSE::PluginVersionData SKSEPlugin_Version
     "",
     0,
     0,
-    { STRPMSKSE::kRuntime_1_7_104, 0 },
+    STRPM_SKSE_COMPATIBLE_VERSION_LIST,
     0
 };
