@@ -60,7 +60,14 @@ Skyrim Together Reborn: 1.8.4 optional 1.6.x build
 STRPM:                   0.10.1-test
 ```
 
-This profile is source-audited but must still pass the two-client E2E, ProxyResolver and chat-suppression runtime tests before being marked validated.
+This profile is now **runtime-validated** on two clients with Skyrim 1.6.1170 + SKSE 2.2.8 + STR 1.8.4. The validation session confirmed:
+
+- both clients resolved and captured the STR 1.8.4 `TransportService::Send` path;
+- native send and receive hooks armed successfully;
+- bidirectional E2E messaging completed;
+- ProxyResolver resolved the remote player proxy correctly in both directions;
+- STRPM transport packets remained suppressed from the yellow STR chat UI;
+- no STRPM-related crash or connection instability was observed during the validation session.
 
 ## v0.10.0 — Skyrim Together Reborn 1.8.3 compatibility
 
@@ -255,7 +262,7 @@ Server chat opcode:     35
 Transport Send flags:   kReliable = 0
 ```
 
-The previous **STR 1.8.3 + Skyrim 1.6.1170 + SKSE 2.2.8** profile was runtime-validated in v0.10.0. STR 1.8.4 is the current target and still requires runtime validation after the Send ABI update.
+The current **STR 1.8.4 + Skyrim 1.6.1170 + SKSE 2.2.8** profile is runtime-validated in v0.10.1. The previous STR 1.8.3 profile remains the validated baseline for v0.10.0.
 
 ## Server resource
 
@@ -335,8 +342,6 @@ Data/SKSE/Plugins/STRPluginMessagingBridge.dll
 
 ## Remaining work
 
-- runtime-test STRPM 0.10.1 against STR 1.8.4 on Skyrim 1.6.1170;
-- validate bidirectional E2E messaging, ProxyResolver mappings and yellow-chat suppression;
 - runtime-test Skyrim 1.6.1179 when a suitable test environment is available;
 - discover/report the local STR connection ID directly;
 - finalize `Host` target semantics;
