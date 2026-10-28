@@ -10,6 +10,6 @@ extern "C" __declspec(dllexport) STRPMSKSE::PluginVersionData SKSEPlugin_Version
     "",
     0,
     0,
-    { STRPMSKSE::kRuntime_1_6_1170, STRPMSKSE::kRuntime_1_6_1179, STRPMSKSE::kRuntime_1_7_104, 0 },
+    { STRPMSKSE::kRuntime_1_7_104, 0 },
     0
 };
