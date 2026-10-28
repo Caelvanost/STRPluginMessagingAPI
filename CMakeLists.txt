@@ -18,6 +18,17 @@ option(
     ON
 )
 
+set(STRPM_SKYRIM_RUNTIME "1.6.1170" CACHE STRING "Skyrim runtime metadata profile")
+set_property(CACHE STRPM_SKYRIM_RUNTIME PROPERTY STRINGS "1.6.1170" "1.7.104")
+
+if(STRPM_SKYRIM_RUNTIME STREQUAL "1.6.1170")
+    set(STRPM_RUNTIME_DEFINE STRPM_RUNTIME_1_6_1170=1)
+elseif(STRPM_SKYRIM_RUNTIME STREQUAL "1.7.104")
+    set(STRPM_RUNTIME_DEFINE STRPM_RUNTIME_1_7_104=1)
+else()
+    message(FATAL_ERROR "Unsupported STRPM_SKYRIM_RUNTIME='${STRPM_SKYRIM_RUNTIME}'")
+endif()
+
 add_library(STRPluginMessagingAPIClient STATIC
     src/STRPluginMessagingAPI.cpp
 )
@@ -46,6 +57,11 @@ target_include_directories(STRPluginMessagingAPIRuntime
         ${CMAKE_CURRENT_SOURCE_DIR}/include
     PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+
+target_compile_definitions(STRPluginMessagingAPIRuntime
+    PRIVATE
+        ${STRPM_RUNTIME_DEFINE}
 )
 
 if(STRPM_ENABLE_UDP_BACKEND)
@@ -359,6 +375,7 @@ if(STRPM_BUILD_STR184_BRIDGE_PROBE)
         PRIVATE
             NOMINMAX
             WIN32_LEAN_AND_MEAN
+            ${STRPM_RUNTIME_DEFINE}
     )
     target_include_directories(STRPluginMessagingBridge
         PRIVATE
@@ -386,6 +403,11 @@ target_include_directories(STRPluginMessagingDiagnostic
     PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/include
         ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+
+target_compile_definitions(STRPluginMessagingDiagnostic
+    PRIVATE
+        ${STRPM_RUNTIME_DEFINE}
 )
 target_link_libraries(STRPluginMessagingDiagnostic
     PRIVATE
