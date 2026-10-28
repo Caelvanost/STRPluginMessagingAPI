@@ -8,7 +8,8 @@ $ErrorActionPreference = "Stop"
 
 $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $Build = [System.IO.Path]::GetFullPath((Join-Path $Root "..\.build\STRPluginMessagingAPI"))
-$PackageSuffix = if ($IncludeDiagnostic) { "-test" } else { "" }
+$RuntimeSuffix = "-Skyrim-1.7.104"
+$PackageSuffix = if ($IncludeDiagnostic) { "$RuntimeSuffix-test" } else { $RuntimeSuffix }
 $Stage = [System.IO.Path]::GetFullPath((Join-Path $Root "..\.package\STRPluginMessagingAPI-v$Version$PackageSuffix"))
 $Dist = [System.IO.Path]::GetFullPath((Join-Path $Root "dist"))
 $Zip = [System.IO.Path]::GetFullPath((Join-Path $Dist "STRPluginMessagingAPI-v$Version$PackageSuffix.zip"))
