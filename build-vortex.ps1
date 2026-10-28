@@ -7,23 +7,23 @@ param(
 $ErrorActionPreference = "Stop"
 
 $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
-$Build = [System.IO.Path]::GetFullPath((Join-Path $Root "..\.build\STRPluginMessagingAPI"))
-$RuntimeSuffix = "-Skyrim-1.7.104"
-$PackageSuffix = if ($IncludeDiagnostic) { "$RuntimeSuffix-test" } else { $RuntimeSuffix }
-$Stage = [System.IO.Path]::GetFullPath((Join-Path $Root "..\.package\STRPluginMessagingAPI-v$Version$PackageSuffix"))
-$Dist = [System.IO.Path]::GetFullPath((Join-Path $Root "dist"))
-$Zip = [System.IO.Path]::GetFullPath((Join-Path $Dist "STRPluginMessagingAPI-v$Version$PackageSuffix.zip"))
+$Workspace = [System.IO.Path]::GetFullPath((Join-Path $Root ".."))
+$Build16 = Join-Path $Workspace ".build\STRPluginMessagingAPI-1.6.1170"
+$Build17 = Join-Path $Workspace ".build\STRPluginMessagingAPI-1.7.104"
+$PackageSuffix = if ($IncludeDiagnostic) { "-test" } else { "" }
+$Stage = Join-Path $Workspace ".package\STRPluginMessagingAPI-v$Version$PackageSuffix"
+$Dist = Join-Path $Root "dist"
+$Zip = Join-Path $Dist "STRPluginMessagingAPI-v$Version$PackageSuffix.zip"
 $Package = Join-Path $Root "package"
 $RelaySource = Join-Path $Root "extras\str-server-resources\strpm-chat-relay"
 $Ninja = "C:\Program Files\Microsoft Visual Studio\18\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\Ninja\ninja.exe"
 $VsDevCmd = "C:\Program Files\Microsoft Visual Studio\18\Community\Common7\Tools\VsDevCmd.bat"
 
-$AllowedRoot = [System.IO.Path]::GetFullPath((Join-Path $Root "..")).TrimEnd('\')
-foreach ($Path in @($Build, $Stage, $Zip)) {
+foreach ($Path in @($Build16, $Build17, $Stage, $Zip)) {
     $FullPath = [System.IO.Path]::GetFullPath($Path)
     if (-not (
-            $FullPath.Equals($AllowedRoot, [System.StringComparison]::OrdinalIgnoreCase) -or
-            $FullPath.StartsWith("$AllowedRoot\", [System.StringComparison]::OrdinalIgnoreCase))) {
+            $FullPath.Equals($Workspace, [System.StringComparison]::OrdinalIgnoreCase) -or
+            $FullPath.StartsWith("$Workspace\", [System.StringComparison]::OrdinalIgnoreCase))) {
         throw "Chemin de sortie hors workspace: $FullPath"
     }
 }
@@ -41,24 +41,41 @@ if (-not (Test-Path -LiteralPath (Join-Path $RelaySource "strpm-chat-relay.manif
     throw "Manifest du relay STRPM introuvable: $RelaySource"
 }
 
-$Command = "`"$VsDevCmd`" -arch=x64 && cmake -S `"$Root`" -B `"$Build`" -G Ninja -DCMAKE_MAKE_PROGRAM=`"$Ninja`" -DCMAKE_BUILD_TYPE=$Configuration -DSTRPM_ENABLE_UDP_BACKEND=OFF -DSTRPM_BUILD_STR184_BRIDGE_PROBE=ON && cmake --build `"$Build`" --config $Configuration"
-cmd.exe /d /s /c $Command
-if ($LASTEXITCODE -ne 0) {
-    throw "Compilation CMake echouee avec le code $LASTEXITCODE."
-}
+function Invoke-STRPMBuild {
+    param(
+        [Parameter(Mandatory=$true)][string]$Runtime,
+        [Parameter(Mandatory=$true)][string]$BuildDir
+    )
 
-$Dll = Join-Path $Build "STRPluginMessagingAPI.dll"
-$BridgeDll = Join-Path $Build "STRPluginMessagingBridge.dll"
-$DiagnosticDll = Join-Path $Build "STRPluginMessagingDiagnostic.dll"
-$RequiredDlls = @($Dll, $BridgeDll)
-if ($IncludeDiagnostic) {
-    $RequiredDlls += $DiagnosticDll
-}
-foreach ($RequiredDll in $RequiredDlls) {
-    if (-not (Test-Path -LiteralPath $RequiredDll -PathType Leaf)) {
-        throw "DLL introuvable apres compilation: $RequiredDll"
+    Write-Host ""
+    Write-Host "Building STRPM v$Version for Skyrim $Runtime..." -ForegroundColor Cyan
+
+    $Command = "`"$VsDevCmd`" -arch=x64 && cmake -S `"$Root`" -B `"$BuildDir`" -G Ninja -DCMAKE_MAKE_PROGRAM=`"$Ninja`" -DCMAKE_BUILD_TYPE=$Configuration -DSTRPM_ENABLE_UDP_BACKEND=OFF -DSTRPM_BUILD_STR184_BRIDGE_PROBE=ON -DSTRPM_SKYRIM_RUNTIME=$Runtime && cmake --build `"$BuildDir`" --config $Configuration"
+    cmd.exe /d /s /c $Command
+    if ($LASTEXITCODE -ne 0) {
+        throw "Compilation CMake echouee pour Skyrim $Runtime avec le code $LASTEXITCODE."
+    }
+
+    foreach ($Name in @(
+        "STRPluginMessagingAPI.dll",
+        "STRPluginMessagingBridge.dll"
+    )) {
+        $Path = Join-Path $BuildDir $Name
+        if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+            throw "DLL introuvable apres compilation Skyrim $Runtime : $Path"
+        }
+    }
+
+    if ($IncludeDiagnostic) {
+        $Diagnostic = Join-Path $BuildDir "STRPluginMessagingDiagnostic.dll"
+        if (-not (Test-Path -LiteralPath $Diagnostic -PathType Leaf)) {
+            throw "DLL diagnostic introuvable apres compilation Skyrim $Runtime : $Diagnostic"
+        }
     }
 }
+
+Invoke-STRPMBuild -Runtime "1.6.1170" -BuildDir $Build16
+Invoke-STRPMBuild -Runtime "1.7.104" -BuildDir $Build17
 
 foreach ($Path in @($Stage, $Zip)) {
     if (Test-Path -LiteralPath $Path) {
@@ -67,31 +84,38 @@ foreach ($Path in @($Stage, $Zip)) {
 }
 
 New-Item -ItemType Directory -Force -Path $Dist | Out-Null
+New-Item -ItemType Directory -Force -Path $Stage | Out-Null
 
-Copy-Item -LiteralPath $Package -Destination $Stage -Recurse -Force
+Copy-Item -LiteralPath (Join-Path $Package "fomod") -Destination (Join-Path $Stage "fomod") -Recurse -Force
 
-# Client payload used by the Client + Server and Client Only FOMOD choices.
-$PluginDir = Join-Path $Stage "Data\SKSE\Plugins"
-New-Item -ItemType Directory -Force -Path $PluginDir | Out-Null
-Copy-Item -LiteralPath $Dll -Destination (Join-Path $PluginDir "STRPluginMessagingAPI.dll") -Force
-Copy-Item -LiteralPath $BridgeDll -Destination (Join-Path $PluginDir "STRPluginMessagingBridge.dll") -Force
+$CommonPluginDir = Join-Path $Stage "Common\SKSE\Plugins"
+New-Item -ItemType Directory -Force -Path $CommonPluginDir | Out-Null
+Copy-Item -LiteralPath (Join-Path $Package "Data\SKSE\Plugins\STRPluginMessagingAPI.ini") -Destination $CommonPluginDir -Force
 
-$PackagedDiagnostic = Join-Path $PluginDir "STRPluginMessagingDiagnostic.dll"
-if ($IncludeDiagnostic) {
-    Copy-Item -LiteralPath $DiagnosticDll -Destination $PackagedDiagnostic -Force
-} elseif (Test-Path -LiteralPath $PackagedDiagnostic) {
-    Remove-Item -LiteralPath $PackagedDiagnostic -Force
+function Stage-Runtime {
+    param(
+        [Parameter(Mandatory=$true)][string]$Runtime,
+        [Parameter(Mandatory=$true)][string]$BuildDir
+    )
+
+    $PluginDir = Join-Path $Stage "Runtime\Skyrim-$Runtime\SKSE\Plugins"
+    New-Item -ItemType Directory -Force -Path $PluginDir | Out-Null
+
+    Copy-Item -LiteralPath (Join-Path $BuildDir "STRPluginMessagingAPI.dll") -Destination $PluginDir -Force
+    Copy-Item -LiteralPath (Join-Path $BuildDir "STRPluginMessagingBridge.dll") -Destination $PluginDir -Force
+
+    if ($IncludeDiagnostic) {
+        Copy-Item -LiteralPath (Join-Path $BuildDir "STRPluginMessagingDiagnostic.dll") -Destination $PluginDir -Force
+    }
 }
 
-# Server payload is deliberately staged outside Data. The FOMOD maps this
-# source folder into Data\SkyrimTogetherReborn, so "Client Only" does not
-# accidentally deploy server files. STR 1.8.4 loads resources from its
-# working-directory "resources" folder.
+Stage-Runtime -Runtime "1.6.1170" -BuildDir $Build16
+Stage-Runtime -Runtime "1.7.104" -BuildDir $Build17
+
 $ServerResourcesRoot = Join-Path $Stage "Server\SkyrimTogetherReborn\resources"
 New-Item -ItemType Directory -Force -Path $ServerResourcesRoot | Out-Null
 Copy-Item -LiteralPath $RelaySource -Destination $ServerResourcesRoot -Recurse -Force
 
-# Fail the build if the FOMOD itself is malformed before producing an archive.
 $FomodInfo = Join-Path $Stage "fomod\info.xml"
 $FomodConfig = Join-Path $Stage "fomod\ModuleConfig.xml"
 foreach ($XmlFile in @($FomodInfo, $FomodConfig)) {
@@ -115,33 +139,41 @@ Add-Type -AssemblyName System.IO.Compression.FileSystem
 $Archive = [System.IO.Compression.ZipFile]::OpenRead($Zip)
 try {
     $Entries = @($Archive.Entries | ForEach-Object { $_.FullName.Replace('\', '/') })
-    foreach ($RequiredEntry in @(
+
+    $RequiredEntries = @(
         "fomod/info.xml",
         "fomod/ModuleConfig.xml",
-        "Data/SKSE/Plugins/STRPluginMessagingAPI.dll",
-        "Data/SKSE/Plugins/STRPluginMessagingAPI.ini",
-        "Data/SKSE/Plugins/STRPluginMessagingBridge.dll",
+        "Common/SKSE/Plugins/STRPluginMessagingAPI.ini",
+        "Runtime/Skyrim-1.6.1170/SKSE/Plugins/STRPluginMessagingAPI.dll",
+        "Runtime/Skyrim-1.6.1170/SKSE/Plugins/STRPluginMessagingBridge.dll",
+        "Runtime/Skyrim-1.7.104/SKSE/Plugins/STRPluginMessagingAPI.dll",
+        "Runtime/Skyrim-1.7.104/SKSE/Plugins/STRPluginMessagingBridge.dll",
         "Server/SkyrimTogetherReborn/resources/strpm-chat-relay/main.lua",
         "Server/SkyrimTogetherReborn/resources/strpm-chat-relay/strpm-chat-relay.manifest"
-    )) {
+    )
+
+    foreach ($RequiredEntry in $RequiredEntries) {
         if ($Entries -notcontains $RequiredEntry) {
             throw "Entree absente de l'archive: $RequiredEntry"
         }
     }
 
-    $DiagnosticEntry = "Data/SKSE/Plugins/STRPluginMessagingDiagnostic.dll"
-    if ($IncludeDiagnostic -and $Entries -notcontains $DiagnosticEntry) {
-        throw "Le client diagnostic est absent du package de test v$Version."
-    }
-    if (-not $IncludeDiagnostic -and $Entries -contains $DiagnosticEntry) {
-        throw "Le client diagnostic ne doit pas etre inclus dans le package normal v$Version."
+    foreach ($Runtime in @("1.6.1170", "1.7.104")) {
+        $DiagnosticEntry = "Runtime/Skyrim-$Runtime/SKSE/Plugins/STRPluginMessagingDiagnostic.dll"
+        if ($IncludeDiagnostic -and $Entries -notcontains $DiagnosticEntry) {
+            throw "Le client diagnostic Skyrim $Runtime est absent du package de test v$Version."
+        }
+        if (-not $IncludeDiagnostic -and $Entries -contains $DiagnosticEntry) {
+            throw "Le client diagnostic Skyrim $Runtime ne doit pas etre inclus dans le package normal v$Version."
+        }
     }
 } finally {
     $Archive.Dispose()
 }
 
 Write-Host ""
-Write-Host "OK - package FOMOD cree :" -ForegroundColor Green
+Write-Host "OK - package FOMOD multi-runtime cree :" -ForegroundColor Green
 Write-Host $Zip
-Write-Host "FOMOD: Client + Server / Client Only / Server Files Only"
+Write-Host "Runtimes: Skyrim 1.6.1170 + Skyrim 1.7.104"
+Write-Host "FOMOD: Installation Type -> Skyrim Runtime"
 Write-Host "Server destination: Data\SkyrimTogetherReborn\resources\strpm-chat-relay"
