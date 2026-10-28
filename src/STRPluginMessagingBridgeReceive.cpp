@@ -29,11 +29,11 @@ namespace STRPMBridgeReceive
 {
     namespace
     {
-        // TransportService is declared as a struct in official STR 1.8.3.
+        // TransportService is declared as a struct in official STR 1.8.4.
         constexpr char kTransportServiceTypeName[] = ".?AUTransportService@@";
         constexpr std::string_view kEnvelopePrefix = "STRPM|v2|";
 
-        // Official TiltedEvolution v1.8.3 Code/encoding/Opcodes.h.
+        // Official TiltedEvolution v1.8.4 Code/encoding/Opcodes.h.
         constexpr std::uint8_t kNotifyChatMessageBroadcastOpcode =
             STRPMSTRCompatibility::kNotifyChatMessageBroadcastOpcode;
 
@@ -478,7 +478,7 @@ namespace STRPMBridgeReceive
                 std::fclose(file);
             }
 
-            // TiltedConnect Client.hpp at the exact STR 1.8.3 submodule commit:
+            // TiltedConnect Client.hpp at the exact STR 1.8.4 submodule commit:
             // virtual ~Client(); OnConsume; OnConnected; OnDisconnected; OnUpdate.
             std::uintptr_t onConsume = 0;
             if (!ReadProcessValue(
