@@ -13,22 +13,37 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Configure
+      - name: Configure Skyrim 1.6.1170
         run: >-
-          cmake -S . -B build -A x64
+          cmake -S . -B build-16 -A x64
           -DSTRPM_ENABLE_UDP_BACKEND=OFF
           -DSTRPM_BUILD_STR184_BRIDGE_PROBE=ON
+          -DSTRPM_SKYRIM_RUNTIME=1.6.1170
 
-      - name: Build
-        run: cmake --build build --config Release --parallel
+      - name: Build Skyrim 1.6.1170
+        run: cmake --build build-16 --config Release --parallel
+
+      - name: Configure Skyrim 1.7.104
+        run: >-
+          cmake -S . -B build-17 -A x64
+          -DSTRPM_ENABLE_UDP_BACKEND=OFF
+          -DSTRPM_BUILD_STR184_BRIDGE_PROBE=ON
+          -DSTRPM_SKYRIM_RUNTIME=1.7.104
+
+      - name: Build Skyrim 1.7.104
+        run: cmake --build build-17 --config Release --parallel
 
       - name: Verify outputs
         shell: pwsh
         run: |
           $required = @(
-            "build/Release/STRPluginMessagingAPI.dll",
-            "build/Release/STRPluginMessagingBridge.dll",
-            "build/Release/STRPluginMessagingDiagnostic.dll",
+            "build-16/Release/STRPluginMessagingAPI.dll",
+            "build-16/Release/STRPluginMessagingBridge.dll",
+            "build-16/Release/STRPluginMessagingDiagnostic.dll",
+            "build-17/Release/STRPluginMessagingAPI.dll",
+            "build-17/Release/STRPluginMessagingBridge.dll",
+            "build-17/Release/STRPluginMessagingDiagnostic.dll",
+            "package/Data/SKSE/Plugins/STRPluginMessagingAPI.ini",
             "package/fomod/info.xml",
             "package/fomod/ModuleConfig.xml",
             "extras/str-server-resources/strpm-chat-relay/main.lua",
@@ -42,20 +57,30 @@ jobs:
           [xml](Get-Content -LiteralPath "package/fomod/info.xml" -Raw) | Out-Null
           [xml](Get-Content -LiteralPath "package/fomod/ModuleConfig.xml" -Raw) | Out-Null
 
-      - name: Package release FOMOD archive
+      - name: Package unified release FOMOD archive
         shell: pwsh
         run: |
           $root = "artifact-release"
-          $zip = "STRPluginMessagingAPI-v0.10.1-Skyrim-1.7.104.zip"
-          $pluginDir = "$root/Data/SKSE/Plugins"
+          $zip = "STRPluginMessagingAPI-v0.10.1.zip"
+          $common = "$root/Common/SKSE/Plugins"
+          $runtime16 = "$root/Runtime/Skyrim-1.6.1170/SKSE/Plugins"
+          $runtime17 = "$root/Runtime/Skyrim-1.7.104/SKSE/Plugins"
           $serverResources = "$root/Server/SkyrimTogetherReborn/resources"
-          New-Item -ItemType Directory -Force -Path $pluginDir | Out-Null
+
+          New-Item -ItemType Directory -Force -Path $common | Out-Null
+          New-Item -ItemType Directory -Force -Path $runtime16 | Out-Null
+          New-Item -ItemType Directory -Force -Path $runtime17 | Out-Null
           New-Item -ItemType Directory -Force -Path $serverResources | Out-Null
 
           Copy-Item "package/fomod" "$root/fomod" -Recurse -Force
-          Copy-Item "build/Release/STRPluginMessagingAPI.dll" "$pluginDir/STRPluginMessagingAPI.dll"
-          Copy-Item "build/Release/STRPluginMessagingBridge.dll" "$pluginDir/STRPluginMessagingBridge.dll"
-          Copy-Item "package/Data/SKSE/Plugins/STRPluginMessagingAPI.ini" "$pluginDir/STRPluginMessagingAPI.ini"
+          Copy-Item "package/Data/SKSE/Plugins/STRPluginMessagingAPI.ini" "$common/STRPluginMessagingAPI.ini"
+
+          Copy-Item "build-16/Release/STRPluginMessagingAPI.dll" "$runtime16/STRPluginMessagingAPI.dll"
+          Copy-Item "build-16/Release/STRPluginMessagingBridge.dll" "$runtime16/STRPluginMessagingBridge.dll"
+
+          Copy-Item "build-17/Release/STRPluginMessagingAPI.dll" "$runtime17/STRPluginMessagingAPI.dll"
+          Copy-Item "build-17/Release/STRPluginMessagingBridge.dll" "$runtime17/STRPluginMessagingBridge.dll"
+
           Copy-Item "extras/str-server-resources/strpm-chat-relay" $serverResources -Recurse -Force
 
           Compress-Archive -Path "$root/*" -DestinationPath $zip -Force
@@ -67,9 +92,11 @@ jobs:
             $required = @(
               "fomod/info.xml",
               "fomod/ModuleConfig.xml",
-              "Data/SKSE/Plugins/STRPluginMessagingAPI.dll",
-              "Data/SKSE/Plugins/STRPluginMessagingBridge.dll",
-              "Data/SKSE/Plugins/STRPluginMessagingAPI.ini",
+              "Common/SKSE/Plugins/STRPluginMessagingAPI.ini",
+              "Runtime/Skyrim-1.6.1170/SKSE/Plugins/STRPluginMessagingAPI.dll",
+              "Runtime/Skyrim-1.6.1170/SKSE/Plugins/STRPluginMessagingBridge.dll",
+              "Runtime/Skyrim-1.7.104/SKSE/Plugins/STRPluginMessagingAPI.dll",
+              "Runtime/Skyrim-1.7.104/SKSE/Plugins/STRPluginMessagingBridge.dll",
               "Server/SkyrimTogetherReborn/resources/strpm-chat-relay/main.lua",
               "Server/SkyrimTogetherReborn/resources/strpm-chat-relay/strpm-chat-relay.manifest"
             )
@@ -78,7 +105,7 @@ jobs:
                 throw "Missing archive entry: $entry"
               }
             }
-            if ($entries -contains "Data/SKSE/Plugins/STRPluginMessagingDiagnostic.dll") {
+            if ($entries -match "STRPluginMessagingDiagnostic.dll") {
               throw "Diagnostic DLL must not be included in the public release archive."
             }
           } finally {
@@ -90,12 +117,15 @@ jobs:
         with:
           name: STRPluginMessagingAPI-windows
           path: |
-            build/Release/STRPluginMessagingAPI.dll
-            build/Release/STRPluginMessagingBridge.dll
-            build/Release/STRPluginMessagingDiagnostic.dll
+            build-16/Release/STRPluginMessagingAPI.dll
+            build-16/Release/STRPluginMessagingBridge.dll
+            build-16/Release/STRPluginMessagingDiagnostic.dll
+            build-17/Release/STRPluginMessagingAPI.dll
+            build-17/Release/STRPluginMessagingBridge.dll
+            build-17/Release/STRPluginMessagingDiagnostic.dll
 
       - name: Upload release package
         uses: actions/upload-artifact@v4
         with:
-          name: STRPluginMessagingAPI-v0.10.1-Skyrim-1.7.104
-          path: STRPluginMessagingAPI-v0.10.1-Skyrim-1.7.104.zip
+          name: STRPluginMessagingAPI-v0.10.1
+          path: STRPluginMessagingAPI-v0.10.1.zip
