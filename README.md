@@ -26,7 +26,7 @@ STRPM payloads use reserved `STRPM|v2|...` chat envelopes. The bridge intercepts
 
 ## v0.10.1 — Skyrim Together Reborn 1.8.4 compatibility
 
-v0.10.1 targets **Skyrim Together Reborn 1.8.4** on both supported STRPM runtime profiles. This `1.7-dev` branch carries the **Skyrim 1.7.104** package while keeping the same STRPM version number as the validated 1.6.1170 package.
+v0.10.1 targets **Skyrim Together Reborn 1.8.4** on both supported STRPM runtime profiles. The package is now built as a **single multi-runtime FOMOD** containing dedicated SKSE DLL variants for Skyrim **1.6.1170** and **1.7.104**, while keeping one shared STRPM version number and one shared wire protocol.
 
 The public chat protocol itself did not change between STR 1.8.3 and 1.8.4:
 
@@ -51,16 +51,23 @@ Send(const ClientMessage& message, EPacketFlags flags = kReliable)
 
 STRPM calls this native function directly, so v0.10.1 now passes `kReliable` explicitly. In the STR 1.8.4 TiltedConnect revision, `kReliable` is enum value `0`.
 
-The runtime target for this branch is:
+The package contains these runtime profiles:
 
 ```text
-Skyrim SE:              1.7.104
-SKSE:                   2.3.1
-Skyrim Together Reborn: 1.8.4
-STRPM:                   0.10.1-test
+Skyrim SE 1.6.1170
+SKSE 2.2.8
+Skyrim Together Reborn 1.8.4
+STRPM 0.10.1
+Status: runtime-validated
+
+Skyrim SE 1.7.104
+SKSE 2.3.1
+Skyrim Together Reborn 1.8.4
+STRPM 0.10.1
+Status: source-audited; runtime validation pending
 ```
 
-The same v0.10.1 codebase is already runtime-validated on Skyrim 1.6.1170 + SKSE 2.2.8 + STR 1.8.4. The 1.7.104 package keeps the validated STR 1.8.4 transport fix, including the explicit `kReliable` argument to `TransportService::Send`, but this runtime profile is **source-audited and not yet runtime-validated**. Two-client E2E, ProxyResolver and chat-suppression tests must pass before the 1.7.104 package is marked validated.
+Both variants are compiled from the same v0.10.1 source and retain the validated STR 1.8.4 transport fix, including the explicit `kReliable` argument to `TransportService::Send`. Only the SKSE runtime metadata is different between the packaged DLL variants.
 
 ## v0.10.0 — Skyrim Together Reborn 1.8.3 compatibility
 
@@ -245,18 +252,24 @@ A listener registered after mappings already exist receives an immediate snapsho
 ## Compatibility target
 
 ```text
-Skyrim:                 1.7.104
-SKSE:                   2.3.1
-Skyrim Together Reborn: 1.8.4
+Skyrim runtime:         1.6.1170        1.7.104
+SKSE:                   2.2.8           2.3.1
+Skyrim Together Reborn: 1.8.4           1.8.4
+STRPM:                  0.10.1          0.10.1
+Client chat opcode:     37              37
+Server chat opcode:     35              35
+Transport Send flags:   kReliable = 0   kReliable = 0
+```
+
+Shared upstream target:
+
+```text
 TiltedEvolution tag:    v1.8.4
 TiltedEvolution commit: 54b3a858e228dc8807ed65bc3f9ac3c3f81b610d
 TiltedConnect commit:   e6f5759364a64462e717db1153781a7eae26a13e
-Client chat opcode:     37
-Server chat opcode:     35
-Transport Send flags:   kReliable = 0
 ```
 
-This `1.7-dev` profile uses the same STRPM **v0.10.1** API and wire protocol as the validated Skyrim 1.6.1170 build. Only the SKSE runtime metadata and package identity are runtime-specific.
+The **1.6.1170** profile is runtime-validated. The **1.7.104** profile uses the same STRPM API, bridge logic and wire protocol, but remains pending two-client runtime validation.
 
 ## Server resource
 
@@ -270,21 +283,26 @@ The wire prefix remains `STRPM|v2|`.
 
 ## FOMOD
 
-The package contains three installation modes:
+v0.10.1 is packaged as one archive for both Skyrim runtimes. The installer first asks for the installation type:
 
 ```text
-Client + Server   Recommended for the player hosting the STR server
-Client Only       For players joining another server
-Server Files Only For a dedicated/server-only update
+Client + Server
+Client Only
+Server Files Only
 ```
 
-The server option deploys the resource under:
+If client files are being installed, the next step asks for the Skyrim runtime:
+
+```text
+Skyrim 1.6.1170
+Skyrim 1.7.104
+```
+
+The selected runtime installs only its matching SKSE DLL variant. The server relay is shared between both runtimes and is deployed under:
 
 ```text
 Data/SkyrimTogetherReborn/resources/strpm-chat-relay/
 ```
-
-including both `main.lua` and `strpm-chat-relay.manifest`.
 
 ## Build
 
@@ -297,7 +315,7 @@ including both `main.lua` and `strpm-chat-relay.manifest`.
 Output:
 
 ```text
-dist/STRPluginMessagingAPI-v0.10.1-Skyrim-1.7.104.zip
+dist/STRPluginMessagingAPI-v0.10.1.zip
 ```
 
 The public release archive intentionally excludes `STRPluginMessagingDiagnostic.dll`.
@@ -317,22 +335,12 @@ build-test-vortex.bat
 Output:
 
 ```text
-dist/STRPluginMessagingAPI-v0.10.1-Skyrim-1.7.104-test.zip
+dist/STRPluginMessagingAPI-v0.10.1-test.zip
 ```
 
-The test archive additionally contains:
+The test archive additionally contains a matching `STRPluginMessagingDiagnostic.dll` in **both runtime payloads**, so either FOMOD choice can be tested with the same test ZIP.
 
-```text
-Data/SKSE/Plugins/STRPluginMessagingDiagnostic.dll
-```
-
-The normal package contains:
-
-```text
-Data/SKSE/Plugins/STRPluginMessagingAPI.dll
-Data/SKSE/Plugins/STRPluginMessagingAPI.ini
-Data/SKSE/Plugins/STRPluginMessagingBridge.dll
-```
+The archive contains separate runtime payloads for 1.6.1170 and 1.7.104. The FOMOD installs only the selected variant into `SKSE/Plugins`.
 
 ## Remaining work
 
