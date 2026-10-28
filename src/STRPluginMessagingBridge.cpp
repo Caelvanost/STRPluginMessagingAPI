@@ -769,20 +769,24 @@ namespace
         if (!transport || !message || address == 0)
             return false;
 
-        using TransportSendFn = bool(__fastcall*)(void*, const void*);
+        // STR 1.8.4 changed TransportService::Send from
+        // Send(message) to Send(message, EPacketFlags). Pass kReliable explicitly.
+        // On Win64 the extra third argument is harmless for the older 1.8.3 ABI,
+        // but required by 1.8.4 where R8 carries the packet flag.
+        using TransportSendFn = bool(__fastcall*)(void*, const void*, int);
         const auto function = reinterpret_cast<TransportSendFn>(address);
 
 #if defined(_MSC_VER)
         __try
         {
-            return function(transport, message);
+            return function(transport, message, STRPMSTRCompatibility::kReliablePacketFlag);
         }
         __except (EXCEPTION_EXECUTE_HANDLER)
         {
             return false;
         }
 #else
-        return function(transport, message);
+        return function(transport, message, STRPMSTRCompatibility::kReliablePacketFlag);
 #endif
     }
 
@@ -966,7 +970,7 @@ namespace
                 }
                 else if (!loggedSendFailure)
                 {
-                    Log("send resolver waiting for mapped STR 1.8.3 runtime");
+                    Log("send resolver waiting for mapped STR 1.8.4 runtime");
                     loggedSendFailure = true;
                 }
             }
