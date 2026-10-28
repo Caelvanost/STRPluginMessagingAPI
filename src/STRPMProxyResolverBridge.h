@@ -1113,7 +1113,7 @@ namespace STRPMProxyResolverBridge
 
                 if (!loggedWaiting)
                 {
-                    Log("ProxyResolver waiting for mapped STR 1.8.3 lifecycle functions");
+                    Log("ProxyResolver waiting for mapped STR 1.8.4 lifecycle functions");
                     loggedWaiting = true;
                 }
                 if (!SleepInterruptible(token, std::chrono::seconds(2)))
