@@ -79,7 +79,7 @@ jobs:
         shell: pwsh
         run: |
           $root = "artifact-release"
-          $zip = "STRPluginMessagingAPI-v0.10.1.zip"
+          $zip = "STRPluginMessagingAPI-v0.11.0.zip"
           $common = "$root/Common/SKSE/Plugins"
           $runtime16 = "$root/Runtime/Skyrim-1.6.1170/SKSE/Plugins"
           $runtime17 = "$root/Runtime/Skyrim-1.7.104/SKSE/Plugins"
@@ -145,5 +145,5 @@ jobs:
       - name: Upload release package
         uses: actions/upload-artifact@v4
         with:
-          name: STRPluginMessagingAPI-v0.10.1
-          path: STRPluginMessagingAPI-v0.10.1.zip
+          name: STRPluginMessagingAPI-v0.11.0
+          path: STRPluginMessagingAPI-v0.11.0.zip
