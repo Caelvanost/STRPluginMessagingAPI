@@ -2,7 +2,7 @@
 
 Shared messaging and STR player-proxy resolution for Skyrim Together Reborn compatibility mods.
 
-Current development version: **v0.10.1**.
+Current development version: **v0.11.0**.
 
 STRPluginMessagingAPI gives SKSE mods one common layer over the **Skyrim Together Reborn 1.8.4 connection**. It is intended for mods such as AnimSyncTogether, OStimTogether, MorphSyncTogether, IEDSyncTogether and TradeTogether so each project does not need to duplicate networking or guess which Skyrim Actor represents a remote STR player.
 
@@ -23,6 +23,28 @@ official STR server + strpm-chat-relay Lua resource
 ```
 
 STRPM payloads use reserved `STRPM|v2|...` chat envelopes. The bridge intercepts those packets before STR's normal chat UI so transport packets do not appear as yellow chat messages. Ordinary STR chat remains untouched.
+
+## v0.11.0 — Inventory Bridge v1
+
+v0.11.0 adds a separate, versioned inventory API without changing the existing messaging API v2.
+
+The bridge converts the local Skyrim inventory into STR-compatible `Inventory::Entry` data and coordinates owner-to-owner transfers through the reserved `strpm.inventory.v1` channel. Consumer mods such as TradeTogether no longer need to inspect or rebuild Skyrim `ExtraDataList` structures.
+
+Key properties:
+
+- local inventory snapshot with portable STR `GameId` values;
+- authenticated server mod-table mapping captured from STR's `AuthenticationResponse`;
+- STR-native extraction of charge, temper/health, poison, soul and temporary enchant effects;
+- transfers apply through STR 1.8.4's native inventory add/remove path on each owning client;
+- two-phase PREPARE/READY/COMMIT/APPLIED coordination with duplicate-COMMIT suppression;
+- no automatic rollback after a COMMIT may have reached the recipient, preventing an uncertain ACK from creating a duplicate item.
+
+The service is exposed as `InventoryInterface v1` through `STR_QueryPluginMessagingInventory`.
+
+Implementation details and consumer usage are documented in `docs/INVENTORY-BRIDGE.md`.
+
+The inventory bridge is **not runtime-validated yet**. The existing STRPM 0.10.1 messaging and ProxyResolver behavior remains the validated baseline.
+
 
 ## v0.10.1 — Skyrim Together Reborn 1.8.4 compatibility
 
@@ -68,27 +90,6 @@ Status: source-audited; runtime validation pending
 ```
 
 Both variants are compiled from the same v0.10.1 source and retain the validated STR 1.8.4 transport fix, including the explicit `kReliable` argument to `TransportService::Send`. Only the SKSE runtime metadata is different between the packaged DLL variants.
-
-## Experimental Inventory Bridge v1
-
-The `inventory-service` branch adds a separate, versioned inventory API without changing the existing messaging API v2.
-
-The bridge converts the local Skyrim inventory into STR-compatible `Inventory::Entry` data and coordinates owner-to-owner transfers through the reserved `strpm.inventory.v1` channel. Consumer mods such as TradeTogether no longer need to inspect or rebuild Skyrim `ExtraDataList` structures.
-
-Key properties:
-
-- local inventory snapshot with portable STR `GameId` values;
-- authenticated server mod-table mapping captured from STR's `AuthenticationResponse`;
-- STR-native extraction of charge, temper/health, poison, soul and temporary enchant effects;
-- transfers apply through STR 1.8.4's native inventory add/remove path on each owning client;
-- two-phase PREPARE/READY/COMMIT/APPLIED coordination with duplicate-COMMIT suppression;
-- no automatic rollback after a COMMIT may have reached the recipient, preventing an uncertain ACK from creating a duplicate item.
-
-The service is exposed as `InventoryInterface v1` through `STR_QueryPluginMessagingInventory`.
-
-Implementation details and consumer usage are documented in `docs/INVENTORY-BRIDGE.md`.
-
-The inventory bridge is **not runtime-validated yet**. The existing STRPM 0.10.1 messaging and ProxyResolver behavior remains the validated baseline.
 
 ## v0.10.0 — Skyrim Together Reborn 1.8.3 compatibility
 
@@ -276,7 +277,7 @@ A listener registered after mappings already exist receives an immediate snapsho
 Skyrim runtime:         1.6.1170        1.7.104
 SKSE:                   2.2.8           2.3.1
 Skyrim Together Reborn: 1.8.4           1.8.4
-STRPM:                  0.10.1          0.10.1
+STRPM:                  0.11.0          0.11.0
 Client chat opcode:     37              37
 Server chat opcode:     35              35
 Transport Send flags:   kReliable = 0   kReliable = 0
@@ -294,7 +295,7 @@ The **1.6.1170** profile is runtime-validated. The **1.7.104** profile uses the 
 
 ## Server resource
 
-v0.10.1 continues to use relay **v4 / 0.4.0**. The server console must report:
+v0.11.0 continues to use relay **v4 / 0.4.0**. The server console must report:
 
 ```text
 [STRPM] Chat relay v4 loaded (authenticated identity payload enabled)
@@ -304,7 +305,7 @@ The wire prefix remains `STRPM|v2|`.
 
 ## FOMOD
 
-v0.10.1 is packaged as one archive for both Skyrim runtimes. The installer first asks for the installation type:
+v0.11.0 is packaged as one archive for both Skyrim runtimes. The installer first asks for the installation type:
 
 ```text
 Client + Server
@@ -336,7 +337,7 @@ Data/SkyrimTogetherReborn/resources/strpm-chat-relay/
 Output:
 
 ```text
-dist/STRPluginMessagingAPI-v0.10.1.zip
+dist/STRPluginMessagingAPI-v0.11.0.zip
 ```
 
 The public release archive intentionally excludes `STRPluginMessagingDiagnostic.dll`.
@@ -356,7 +357,7 @@ build-test-vortex.bat
 Output:
 
 ```text
-dist/STRPluginMessagingAPI-v0.10.1-test.zip
+dist/STRPluginMessagingAPI-v0.11.0-test.zip
 ```
 
 The test archive additionally contains a matching `STRPluginMessagingDiagnostic.dll` in **both runtime payloads**, so either FOMOD choice can be tested with the same test ZIP.
@@ -365,7 +366,7 @@ The archive contains separate runtime payloads for 1.6.1170 and 1.7.104. The FOM
 
 ## Remaining work
 
-- runtime-test STRPM 0.10.1 on Skyrim 1.7.104 + SKSE 2.3.1 + STR 1.8.4;
+- runtime-test STRPM 0.11.0 on Skyrim 1.7.104 + SKSE 2.3.1 + STR 1.8.4;
 - validate bidirectional E2E messaging, ProxyResolver mappings and yellow-chat suppression on two clients;
 - runtime-test Skyrim 1.6.1179 when a suitable test environment is available;
 - discover/report the local STR connection ID directly;
