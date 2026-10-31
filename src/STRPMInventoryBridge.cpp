@@ -140,6 +140,8 @@ namespace STRPMInventoryBridge
         struct IncomingTransaction
         {
             STRPM::InventoryEntry entry{};
+            bool validationScheduled{ false };
+            bool ready{ false };
             bool applyScheduled{ false };
             bool applied{ false };
             std::chrono::steady_clock::time_point lastAction{};
@@ -797,12 +799,19 @@ namespace STRPMInventoryBridge
             return value.baseId == 0 && value.modId == 0;
         }
 
-        bool ValidatePortableEntry(
+        bool ValidateEntryStructure(
             const STRPM::InventoryEntry& entry) noexcept
         {
             if (entry.count <= 0 ||
                 entry.enchantEffectCount >
                     STRPM::kMaxInventoryEffects)
+            {
+                return false;
+            }
+
+            if ((entry.baseId.baseId == 0 &&
+                 entry.baseId.modId == 0) ||
+                entry.baseId.modId == 0xFFFFFFFFu)
             {
                 return false;
             }
@@ -816,23 +825,39 @@ namespace STRPMInventoryBridge
                 return false;
             }
 
+            if (!IsZeroGameId(entry.extraEnchantId) &&
+                entry.extraEnchantId.modId == 0xFFFFFFFFu &&
+                entry.enchantEffectCount == 0)
+            {
+                return false;
+            }
+
+            if (!IsZeroGameId(entry.extraPoisonId) &&
+                entry.extraPoisonId.modId == 0xFFFFFFFFu)
+            {
+                return false;
+            }
+
+            return true;
+        }
+
+        bool ValidatePortableEntryOnGameThread(
+            const STRPM::InventoryEntry& entry) noexcept
+        {
+            if (!ValidateEntryStructure(entry))
+                return false;
+
             std::uint32_t ignored = 0;
             if (!ResolveGameIdToLocalFormID(entry.baseId, ignored))
                 return false;
 
-            if (!IsZeroGameId(entry.extraEnchantId))
+            if (!IsZeroGameId(entry.extraEnchantId) &&
+                entry.extraEnchantId.modId != 0xFFFFFFFFu &&
+                !ResolveGameIdToLocalFormID(
+                    entry.extraEnchantId,
+                    ignored))
             {
-                if (entry.extraEnchantId.modId == 0xFFFFFFFFu)
-                {
-                    if (entry.enchantEffectCount == 0)
-                        return false;
-                }
-                else if (!ResolveGameIdToLocalFormID(
-                             entry.extraEnchantId,
-                             ignored))
-                {
-                    return false;
-                }
+                return false;
             }
 
             if (!IsZeroGameId(entry.extraPoisonId) &&
@@ -1411,11 +1436,66 @@ namespace STRPMInventoryBridge
                 transaction.entry);
         }
 
+        void ValidateIncomingOnGameThread(
+            TransactionKey key)
+        {
+            IncomingTransaction transaction{};
+            {
+                std::scoped_lock lock(g_transactionMutex);
+                const auto it = g_incoming.find(key);
+                if (it == g_incoming.end() ||
+                    !it->second.validationScheduled)
+                {
+                    return;
+                }
+                transaction = it->second;
+            }
+
+            if (!ValidatePortableEntryOnGameThread(
+                    transaction.entry))
+            {
+                {
+                    std::scoped_lock lock(g_transactionMutex);
+                    g_incoming.erase(key);
+                }
+                SendWire(
+                    key.sender,
+                    WireType::kAbort,
+                    key.transferID,
+                    transaction.entry,
+                    STRPM::Result::kUnsupportedItem);
+                return;
+            }
+
+            {
+                std::scoped_lock lock(g_transactionMutex);
+                const auto it = g_incoming.find(key);
+                if (it == g_incoming.end())
+                    return;
+                it->second.validationScheduled = false;
+                it->second.ready = true;
+                it->second.lastAction =
+                    std::chrono::steady_clock::now();
+            }
+
+            SendWire(
+                key.sender,
+                WireType::kReady,
+                key.transferID,
+                transaction.entry);
+            NotifyTransferEvent(
+                key.transferID,
+                key.sender,
+                STRPM::InventoryTransferState::kPrepared,
+                STRPM::Result::kOk,
+                transaction.entry);
+        }
+
         void HandlePrepare(
             const STRPM::Message* message,
             const WireMessage& wire)
         {
-            if (!ValidatePortableEntry(wire.entry))
+            if (!ValidateEntryStructure(wire.entry))
             {
                 SendWire(
                     message->sender.connectionID,
@@ -1432,7 +1512,9 @@ namespace STRPMInventoryBridge
             };
 
             bool alreadyApplied = false;
+            bool alreadyReady = false;
             bool mismatch = false;
+            bool scheduleValidation = false;
             {
                 std::scoped_lock lock(g_transactionMutex);
                 auto [it, inserted] =
@@ -1440,8 +1522,10 @@ namespace STRPMInventoryBridge
                 if (inserted)
                 {
                     it->second.entry = wire.entry;
+                    it->second.validationScheduled = true;
                     it->second.lastAction =
                         std::chrono::steady_clock::now();
+                    scheduleValidation = true;
                 }
                 else
                 {
@@ -1452,6 +1536,15 @@ namespace STRPMInventoryBridge
                         it->second.entry.count !=
                             wire.entry.count;
                     alreadyApplied = it->second.applied;
+                    alreadyReady = it->second.ready;
+                    if (!mismatch &&
+                        !alreadyApplied &&
+                        !alreadyReady &&
+                        !it->second.validationScheduled)
+                    {
+                        it->second.validationScheduled = true;
+                        scheduleValidation = true;
+                    }
                     it->second.lastAction =
                         std::chrono::steady_clock::now();
                 }
@@ -1478,17 +1571,39 @@ namespace STRPMInventoryBridge
                 return;
             }
 
-            SendWire(
-                message->sender.connectionID,
-                WireType::kReady,
-                wire.transferID,
-                wire.entry);
-            NotifyTransferEvent(
-                wire.transferID,
-                message->sender.connectionID,
-                STRPM::InventoryTransferState::kPrepared,
-                STRPM::Result::kOk,
-                wire.entry);
+            if (alreadyReady)
+            {
+                SendWire(
+                    message->sender.connectionID,
+                    WireType::kReady,
+                    wire.transferID,
+                    wire.entry);
+                return;
+            }
+
+            if (!scheduleValidation)
+                return;
+
+            auto* taskInterface = SKSE::GetTaskInterface();
+            if (!taskInterface)
+            {
+                {
+                    std::scoped_lock lock(g_transactionMutex);
+                    g_incoming.erase(key);
+                }
+                SendWire(
+                    message->sender.connectionID,
+                    WireType::kAbort,
+                    wire.transferID,
+                    wire.entry,
+                    STRPM::Result::kNotAvailable);
+                return;
+            }
+
+            taskInterface->AddTask(
+                [key]() {
+                    ValidateIncomingOnGameThread(key);
+                });
         }
 
         void HandleReady(
@@ -1557,10 +1672,10 @@ namespace STRPMInventoryBridge
             {
                 std::scoped_lock lock(g_transactionMutex);
                 const auto it = g_incoming.find(key);
-                if (it == g_incoming.end())
+                if (it == g_incoming.end() ||
+                    !it->second.ready)
                 {
-                    // A COMMIT without PREPARE is not accepted. This prevents a
-                    // sender from bypassing recipient-side validation.
+                    // A COMMIT without a validated PREPARE is not accepted.
                     return;
                 }
 
@@ -1939,14 +2054,8 @@ namespace STRPMInventoryBridge
             if (!STRPMProxyResolverBridge::IsSTRSessionConnected())
                 return STRPM::Result::kNotConnected;
 
-            if (!ValidatePortableEntry(*entry))
+            if (!ValidateEntryStructure(*entry))
                 return STRPM::Result::kUnsupportedItem;
-
-            if (GetMatchingLocalCount(*entry) <
-                entry->count)
-            {
-                return STRPM::Result::kTargetNotFound;
-            }
 
             const auto transferID =
                 g_nextTransferID.fetch_add(1);
