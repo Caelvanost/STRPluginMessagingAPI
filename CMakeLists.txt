@@ -6,6 +6,8 @@ project(
     LANGUAGES CXX
 )
 
+find_package(CommonLibSSE CONFIG REQUIRED)
+
 option(
     STRPM_ENABLE_UDP_BACKEND
     "Build the legacy standalone UDP backend"
@@ -369,6 +371,7 @@ if(STRPM_BUILD_STR184_BRIDGE_PROBE)
         ${STRPM_BRIDGE_SOURCE}
         src/STRPluginMessagingBridgeReceive.cpp
         src/STRPluginMessagingBridgeSKSE.cpp
+        src/STRPMInventoryBridge.cpp
     )
     target_compile_features(STRPluginMessagingBridge PUBLIC cxx_std_20)
     target_compile_definitions(STRPluginMessagingBridge
@@ -384,6 +387,7 @@ if(STRPM_BUILD_STR184_BRIDGE_PROBE)
     )
     target_link_libraries(STRPluginMessagingBridge
         PRIVATE
+            CommonLibSSE::CommonLibSSE
             Shell32
             Ole32
     )
