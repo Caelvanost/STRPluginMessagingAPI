@@ -1,7 +1,7 @@
 #include "STRPMInventoryBridge.h"
 
 #include "STRPMInventoryNative.h"
-#include "STRPMProxyResolverBridge.h"
+#include "STRPMSessionState.h"
 #include "STRPMServerModMap.h"
 #include "STRPMSTRCompatibility.h"
 
@@ -2080,7 +2080,7 @@ namespace STRPMInventoryBridge
             *outTransferID = 0;
             if (!g_ready.load())
                 return STRPM::Result::kNotAvailable;
-            if (!STRPMProxyResolverBridge::IsSTRSessionConnected())
+            if (!STRPM_IsSTRSessionConnected())
                 return STRPM::Result::kNotConnected;
 
             if (!ValidateEntryStructure(*entry))
