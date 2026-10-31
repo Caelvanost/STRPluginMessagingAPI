@@ -1844,22 +1844,34 @@ namespace STRPMInventoryBridge
         void WorkerLoop(std::stop_token token)
         {
             bool nativeLoggedWaiting = false;
+            auto nextResolveAttempt =
+                std::chrono::steady_clock::time_point{};
             while (!token.stop_requested())
             {
                 EnsureChannelRegistered();
 
-                if (!ResolveNativeFunctions())
+                const auto now = std::chrono::steady_clock::now();
+                const bool nativeResolved =
+                    g_getItemFromExtraDataAddress.load() != 0 &&
+                    g_addOrRemoveItemAddress.load() != 0;
+                if (!nativeResolved &&
+                    (nextResolveAttempt.time_since_epoch().count() == 0 ||
+                     now >= nextResolveAttempt))
                 {
-                    if (!nativeLoggedWaiting)
+                    nextResolveAttempt = now + 2s;
+                    if (!ResolveNativeFunctions())
                     {
-                        Log(
-                            "STRPM inventory native bridge waiting for STR 1.8.4 runtime");
-                        nativeLoggedWaiting = true;
+                        if (!nativeLoggedWaiting)
+                        {
+                            Log(
+                                "STRPM inventory native bridge waiting for STR 1.8.4 runtime");
+                            nativeLoggedWaiting = true;
+                        }
                     }
-                }
-                else
-                {
-                    nativeLoggedWaiting = false;
+                    else
+                    {
+                        nativeLoggedWaiting = false;
+                    }
                 }
 
                 const bool ready =
