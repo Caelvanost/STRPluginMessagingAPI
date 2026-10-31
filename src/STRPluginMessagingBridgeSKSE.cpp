@@ -1,6 +1,9 @@
 #include "SKSEPluginVersionCompat.h"
 #include "STRPMSKSERuntimeProfile.h"
 #include "STRPluginMessagingAPI/STRPluginMessagingAPI.h"
+#include "STRPMInventoryBridge.h"
+
+#include <SKSE/SKSE.h>
 
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -29,7 +32,6 @@
 #include "STRPMProxyResolverBootstrapV2.h"
 #include "STRPMProxyResolverTrace.h"
 
-struct SKSEInterface;
 
 namespace
 {
@@ -262,8 +264,9 @@ extern "C" __declspec(dllexport) STRPMSKSE::PluginVersionData SKSEPlugin_Version
     0
 };
 
-extern "C" __declspec(dllexport) bool SKSEPlugin_Load(const SKSEInterface*)
+extern "C" __declspec(dllexport) bool SKSEPlugin_Load(const SKSE::LoadInterface* skse)
 {
+    SKSE::Init(skse);
     FILE* file = nullptr;
     fopen_s(&file, "Data\\SKSE\\Plugins\\STRPluginMessagingBridge.log", "a");
     if (file != nullptr)
@@ -275,6 +278,7 @@ extern "C" __declspec(dllexport) bool SKSEPlugin_Load(const SKSEInterface*)
     STRPMChatUiSuppressBootstrap::Start();
     STRPMProxyResolverBootstrapV2::Start();
     STRPMProxyResolverTrace::Start();
+    STRPMInventoryBridge::Start();
 
     // v0.10.1 keeps the raw OnConsume metadata observer as a fallback, but the
     // primary identity path is now the reserved API channel. The server relay
