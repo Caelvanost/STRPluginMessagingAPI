@@ -23,12 +23,15 @@
 #include <cctype>
 #include <cstdint>
 #include <cstdio>
+#include <cstdarg>
+#include <cstdlib>
 #include <cstring>
 #include <mutex>
 #include <optional>
 #include <string>
 #include <string_view>
 #include <thread>
+#include <type_traits>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -2082,37 +2085,34 @@ namespace STRPMInventoryBridge
     {
         return g_ready.load();
     }
+
+    STRPM::Result QueryInterface(
+        std::uint32_t requestedVersion,
+        const STRPM::InventoryInterface** outInterface) noexcept
+    {
+        if (!outInterface)
+            return STRPM::Result::kInvalidArgument;
+
+        *outInterface = nullptr;
+        if (requestedVersion !=
+            STRPM::kInventoryInterfaceVersion)
+        {
+            return STRPM::Result::kUnsupportedVersion;
+        }
+
+        if (!IsReady())
+            return STRPM::Result::kNotAvailable;
+
+        *outInterface = &g_interface;
+        return STRPM::Result::kOk;
+    }
 }
 
 STRPM_EXPORT STRPM::Result STRPM_CALL STR_QueryPluginMessagingInventory(
     std::uint32_t requestedVersion,
     const STRPM::InventoryInterface** outInterface)
 {
-    if (!outInterface)
-        return STRPM::Result::kInvalidArgument;
-
-    *outInterface = nullptr;
-    if (requestedVersion !=
-        STRPM::kInventoryInterfaceVersion)
-    {
-        return STRPM::Result::kUnsupportedVersion;
-    }
-
-    if (!STRPMInventoryBridge::IsReady())
-        return STRPM::Result::kNotAvailable;
-
-    // g_interface has internal linkage but lives in this translation unit.
-    // Query through a tiny local helper to keep the public ABI POD-only.
-    extern const STRPM::InventoryInterface*
-        STRPM_GetInventoryInterfaceInternal() noexcept;
-    *outInterface = STRPM_GetInventoryInterfaceInternal();
-    return *outInterface ?
-        STRPM::Result::kOk :
-        STRPM::Result::kNotAvailable;
-}
-
-const STRPM::InventoryInterface*
-STRPM_GetInventoryInterfaceInternal() noexcept
-{
-    return &STRPMInventoryBridge::g_interface;
+    return STRPMInventoryBridge::QueryInterface(
+        requestedVersion,
+        outInterface);
 }
