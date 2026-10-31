@@ -306,6 +306,8 @@ namespace STRPM
 
         // Two-call pattern: call with items=nullptr/capacity=0 to obtain the
         // required item count, then call again with a sufficiently large buffer.
+        // This synchronous snapshot touches Skyrim inventory state and must be
+        // called from Skyrim's game thread.
         Result(STRPM_CALL* getLocalInventory)(
             InventoryItem* items,
             std::size_t capacity,
@@ -320,6 +322,9 @@ namespace STRPM
             const InventoryEntry* entry,
             InventoryTransferID* outTransferID);
 
+        // Transfer callbacks may originate from STRPM worker/receive threads or
+        // from the SKSE task thread. Consumers must marshal UI/game mutations to
+        // their own game-thread path.
         Result(STRPM_CALL* registerTransferListener)(
             InventoryTransferCallback callback,
             void* userData);
