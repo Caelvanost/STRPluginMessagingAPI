@@ -887,13 +887,20 @@ namespace STRPMInventoryBridge
             const STRPM::InventoryEntry& left,
             const STRPM::InventoryEntry& right) noexcept
         {
+            const bool temporaryEnchantIds =
+                left.extraEnchantId.modId == 0xFFFFFFFFu &&
+                right.extraEnchantId.modId == 0xFFFFFFFFu;
+            const bool enchantIdMatches =
+                left.extraEnchantId.modId ==
+                    right.extraEnchantId.modId &&
+                (temporaryEnchantIds ||
+                 left.extraEnchantId.baseId ==
+                    right.extraEnchantId.baseId);
+
             if (left.baseId.baseId != right.baseId.baseId ||
                 left.baseId.modId != right.baseId.modId ||
                 left.extraCharge != right.extraCharge ||
-                left.extraEnchantId.baseId !=
-                    right.extraEnchantId.baseId ||
-                left.extraEnchantId.modId !=
-                    right.extraEnchantId.modId ||
+                !enchantIdMatches ||
                 left.extraEnchantCharge !=
                     right.extraEnchantCharge ||
                 left.enchantEffectCount !=
@@ -1398,10 +1405,33 @@ namespace STRPMInventoryBridge
 
             nativeEntry.Count =
                 std::abs(transaction.entry.count);
+
+            const auto before =
+                GetMatchingLocalCount(transaction.entry);
             auto* player = RE::PlayerCharacter::GetSingleton();
             if (!player ||
                 !InvokeAddOrRemoveItem(player, &nativeEntry))
             {
+                SendWire(
+                    key.sender,
+                    WireType::kAbort,
+                    key.transferID,
+                    transaction.entry,
+                    STRPM::Result::kTransportError);
+                return;
+            }
+
+            const auto after =
+                GetMatchingLocalCount(transaction.entry);
+            if (after < before + transaction.entry.count)
+            {
+                const auto added = std::max(0, after - before);
+                if (added > 0)
+                {
+                    nativeEntry.Count = -added;
+                    InvokeAddOrRemoveItem(player, &nativeEntry);
+                }
+
                 SendWire(
                     key.sender,
                     WireType::kAbort,
