@@ -1960,9 +1960,8 @@ namespace STRPMInventoryBridge
                 for (auto it = g_incoming.begin();
                      it != g_incoming.end();)
                 {
-                    if (it->second.applied &&
-                        now - it->second.lastAction >
-                            kIncomingRetention)
+                    if (now - it->second.lastAction >
+                        kIncomingRetention)
                     {
                         it = g_incoming.erase(it);
                     }
