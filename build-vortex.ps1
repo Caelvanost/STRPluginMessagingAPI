@@ -8,8 +8,8 @@ $ErrorActionPreference = "Stop"
 
 $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $Workspace = [System.IO.Path]::GetFullPath((Join-Path $Root ".."))
-$Build16 = Join-Path $Workspace ".build\STRPluginMessagingAPI-1.6.1170"
-$Build17 = Join-Path $Workspace ".build\STRPluginMessagingAPI-1.7.104"
+$Build16 = Join-Path $Workspace ".build\STRPluginMessagingAPI-inventory-1.6.1170"
+$Build17 = Join-Path $Workspace ".build\STRPluginMessagingAPI-inventory-1.7.104"
 $PackageSuffix = if ($IncludeDiagnostic) { "-test" } else { "" }
 $Stage = Join-Path $Workspace ".package\STRPluginMessagingAPI-v$Version$PackageSuffix"
 $Dist = Join-Path $Root "dist"
