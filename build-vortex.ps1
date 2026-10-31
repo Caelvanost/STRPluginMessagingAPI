@@ -19,6 +19,19 @@ $RelaySource = Join-Path $Root "extras\str-server-resources\strpm-chat-relay"
 $Ninja = "C:\Program Files\Microsoft Visual Studio\18\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\Ninja\ninja.exe"
 $VsDevCmd = "C:\Program Files\Microsoft Visual Studio\18\Community\Common7\Tools\VsDevCmd.bat"
 
+$VcpkgRoot = if ($env:VCPKG_ROOT) {
+    [System.IO.Path]::GetFullPath($env:VCPKG_ROOT)
+} elseif (Test-Path -LiteralPath "C:\dev\vcpkg" -PathType Container) {
+    "C:\dev\vcpkg"
+} else {
+    $null
+}
+$VcpkgToolchain = if ($VcpkgRoot) {
+    Join-Path $VcpkgRoot "scripts\buildsystems\vcpkg.cmake"
+} else {
+    $null
+}
+
 foreach ($Path in @($Build16, $Build17, $Stage, $Zip)) {
     $FullPath = [System.IO.Path]::GetFullPath($Path)
     if (-not (
@@ -33,6 +46,9 @@ if (-not (Test-Path -LiteralPath $VsDevCmd -PathType Leaf)) {
 }
 if (-not (Test-Path -LiteralPath $Ninja -PathType Leaf)) {
     throw "Ninja introuvable: $Ninja"
+}
+if (-not $VcpkgToolchain -or -not (Test-Path -LiteralPath $VcpkgToolchain -PathType Leaf)) {
+    throw "vcpkg introuvable. Definis VCPKG_ROOT ou installe-le dans C:\dev\vcpkg."
 }
 if (-not (Test-Path -LiteralPath (Join-Path $RelaySource "main.lua") -PathType Leaf)) {
     throw "Relay STRPM introuvable: $RelaySource"
@@ -50,7 +66,7 @@ function Invoke-STRPMBuild {
     Write-Host ""
     Write-Host "Building STRPM v$Version for Skyrim $Runtime..." -ForegroundColor Cyan
 
-    $Command = "`"$VsDevCmd`" -arch=x64 && cmake -S `"$Root`" -B `"$BuildDir`" -G Ninja -DCMAKE_MAKE_PROGRAM=`"$Ninja`" -DCMAKE_BUILD_TYPE=$Configuration -DSTRPM_ENABLE_UDP_BACKEND=OFF -DSTRPM_BUILD_STR184_BRIDGE_PROBE=ON -DSTRPM_SKYRIM_RUNTIME=$Runtime && cmake --build `"$BuildDir`" --config $Configuration"
+    $Command = "`"$VsDevCmd`" -arch=x64 && cmake -S `"$Root`" -B `"$BuildDir`" -G Ninja -DCMAKE_MAKE_PROGRAM=`"$Ninja`" -DCMAKE_TOOLCHAIN_FILE=`"$VcpkgToolchain`" -DVCPKG_TARGET_TRIPLET=x64-windows -DCMAKE_BUILD_TYPE=$Configuration -DSTRPM_ENABLE_UDP_BACKEND=OFF -DSTRPM_BUILD_STR184_BRIDGE_PROBE=ON -DSTRPM_SKYRIM_RUNTIME=$Runtime && cmake --build `"$BuildDir`" --config $Configuration"
     cmd.exe /d /s /c $Command
     if ($LASTEXITCODE -ne 0) {
         throw "Compilation CMake echouee pour Skyrim $Runtime avec le code $LASTEXITCODE."
