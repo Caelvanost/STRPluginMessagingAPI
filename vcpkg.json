@@ -1,0 +1,7 @@
+{
+  "name": "strpluginmessagingapi",
+  "version-string": "0.10.1",
+  "dependencies": [
+    "commonlibsse-ng-flatrim"
+  ]
+}
