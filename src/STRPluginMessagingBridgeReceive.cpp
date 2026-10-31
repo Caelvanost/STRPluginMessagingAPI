@@ -851,9 +851,11 @@ namespace STRPMBridgeReceive
                     g_authCapture.size,
                     parsed))
             {
+                std::size_t capturedCount = 0;
                 {
                     std::scoped_lock lock(g_serverModsMutex);
                     g_serverMods = std::move(parsed);
+                    capturedCount = g_serverMods.size();
                 }
 
                 FILE* file = nullptr;
@@ -863,7 +865,7 @@ namespace STRPMBridgeReceive
                     std::fprintf(
                         file,
                         "STRPM inventory bridge captured authenticated server mod map: %zu entries\n",
-                        g_serverMods.size());
+                        capturedCount);
                     std::fclose(file);
                 }
             }
@@ -1415,5 +1417,31 @@ namespace STRPMBridgeReceive
         return g_onConsumeAddress != 0 &&
                g_breakpointArmed.load() &&
                g_captureDispatchRunning.load();
+    }
+
+    bool CopyServerModMap(
+        std::vector<STRPMServerModMap::Entry>& outEntries) noexcept
+    {
+        try
+        {
+            std::scoped_lock lock(g_serverModsMutex);
+            if (g_serverMods.empty())
+                return false;
+            outEntries = g_serverMods;
+            return true;
+        }
+        catch (...)
+        {
+            outEntries.clear();
+            return false;
+        }
+    }
+}
+
+namespace STRPMServerModMap
+{
+    bool Snapshot(std::vector<Entry>& outEntries) noexcept
+    {
+        return STRPMBridgeReceive::CopyServerModMap(outEntries);
     }
 }
