@@ -425,12 +425,13 @@ set_target_properties(STRPluginMessagingDiagnostic
 )
 
 if(MSVC)
-    target_compile_options(STRPluginMessagingAPIClient PRIVATE /W4 /permissive- /EHsc)
+    target_compile_options(STRPluginMessagingAPIClient PRIVATE /W4 /permissive- /EHsc /utf-8)
     target_compile_options(STRPluginMessagingAPIRuntime
         PRIVATE
             /W4
             /permissive-
             /EHsc
+            /utf-8
             /FI${CMAKE_CURRENT_SOURCE_DIR}/src/STRPMRuntimeLoadRedirect.h
     )
     target_compile_options(STRPluginMessagingDiagnostic
@@ -438,6 +439,7 @@ if(MSVC)
             /W4
             /permissive-
             /EHsc
+            /utf-8
             /FI${CMAKE_CURRENT_SOURCE_DIR}/src/STRPMDiagnosticLogRedirect.h
     )
     if(STRPM_BUILD_STR184_BRIDGE_PROBE)
@@ -446,6 +448,7 @@ if(MSVC)
                 /W4
                 /permissive-
                 /EHsc
+                /utf-8
                 /FI${CMAKE_CURRENT_SOURCE_DIR}/src/STRPMLogRedirect.h
         )
     endif()
