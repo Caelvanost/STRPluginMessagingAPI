@@ -2,7 +2,7 @@
 
 The inventory bridge is an experimental STRPM service that exposes Skyrim Together Reborn 1.8.4's canonical `Inventory::Entry` representation to consumer SKSE mods without exposing Skyrim `ExtraDataList` objects.
 
-It is developed on the `inventory-service` branch and keeps the STRPM package version at **0.10.1**.
+It is developed on the `inventory-service` branch as **STRPM 0.11.0**.
 
 ## Responsibility split
 
@@ -126,6 +126,6 @@ These restrictions can be relaxed later as individual paths are validated.
 
 ## Runtime status
 
-The underlying STRPM 0.10.1 messaging/ProxyResolver profile is already runtime-validated on Skyrim 1.6.1170 + SKSE 2.2.8 + STR 1.8.4.
+The underlying STRPM 0.10.1 messaging/ProxyResolver baseline remains runtime-validated on Skyrim 1.6.1170 + SKSE 2.2.8 + STR 1.8.4.
 
 The Inventory Bridge itself is **source-audited and compile-tested only until a two-client runtime test is completed**. Do not treat it as release-ready before that validation.
