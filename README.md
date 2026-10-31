@@ -69,6 +69,27 @@ Status: source-audited; runtime validation pending
 
 Both variants are compiled from the same v0.10.1 source and retain the validated STR 1.8.4 transport fix, including the explicit `kReliable` argument to `TransportService::Send`. Only the SKSE runtime metadata is different between the packaged DLL variants.
 
+## Experimental Inventory Bridge v1
+
+The `inventory-service` branch adds a separate, versioned inventory API without changing the existing messaging API v2.
+
+The bridge converts the local Skyrim inventory into STR-compatible `Inventory::Entry` data and coordinates owner-to-owner transfers through the reserved `strpm.inventory.v1` channel. Consumer mods such as TradeTogether no longer need to inspect or rebuild Skyrim `ExtraDataList` structures.
+
+Key properties:
+
+- local inventory snapshot with portable STR `GameId` values;
+- authenticated server mod-table mapping captured from STR's `AuthenticationResponse`;
+- STR-native extraction of charge, temper/health, poison, soul and temporary enchant effects;
+- transfers apply through STR 1.8.4's native inventory add/remove path on each owning client;
+- two-phase PREPARE/READY/COMMIT/APPLIED coordination with duplicate-COMMIT suppression;
+- no automatic rollback after a COMMIT may have reached the recipient, preventing an uncertain ACK from creating a duplicate item.
+
+The service is exposed as `InventoryInterface v1` through `STR_QueryPluginMessagingInventory`.
+
+Implementation details and consumer usage are documented in `docs/INVENTORY-BRIDGE.md`.
+
+The inventory bridge is **not runtime-validated yet**. The existing STRPM 0.10.1 messaging and ProxyResolver behavior remains the validated baseline.
+
 ## v0.10.0 — Skyrim Together Reborn 1.8.3 compatibility
 
 v0.10.0 retargets the native bridge from STR 1.8.0 to **STR 1.8.3**.
