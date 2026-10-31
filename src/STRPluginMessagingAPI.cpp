@@ -162,6 +162,40 @@ namespace STRPM
 #endif
     }
 
+    const InventoryInterface* LoadInventoryFromModule(
+        const wchar_t* moduleName) noexcept
+    {
+#if defined(_WIN32)
+        const auto module = LoadPluginModule(moduleName);
+        if (module == nullptr) {
+            return nullptr;
+        }
+
+        const auto rawExport = GetProcAddress(module, kQueryInventoryExportName);
+        if (rawExport == nullptr) {
+            return nullptr;
+        }
+
+        const auto queryInventory =
+            reinterpret_cast<QueryInventoryInterfaceFn>(rawExport);
+
+        const InventoryInterface* inventory = nullptr;
+        if (queryInventory(kInventoryInterfaceVersion, &inventory) != Result::kOk) {
+            return nullptr;
+        }
+
+        if (inventory == nullptr ||
+            inventory->version != kInventoryInterfaceVersion) {
+            return nullptr;
+        }
+
+        return inventory;
+#else
+        (void)moduleName;
+        return nullptr;
+#endif
+    }
+
     const char* ResultToString(Result result) noexcept
     {
         switch (result) {
@@ -187,6 +221,12 @@ namespace STRPM
             return "transport error";
         case Result::kTargetNotFound:
             return "target not found";
+        case Result::kBufferTooSmall:
+            return "buffer too small";
+        case Result::kBusy:
+            return "busy";
+        case Result::kUnsupportedItem:
+            return "unsupported item";
         default:
             return "unknown result";
         }
