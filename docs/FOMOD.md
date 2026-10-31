@@ -1,6 +1,6 @@
 # STRPM FOMOD installation
 
-STRPluginMessagingAPI v0.10.1 ships as a single Vortex/FOMOD archive containing both supported Skyrim runtime variants plus the shared STR server resource.
+STRPluginMessagingAPI v0.11.0 ships as a single Vortex/FOMOD archive containing both supported Skyrim runtime variants plus the shared STR server resource.
 
 ## Installation flow
 
@@ -27,7 +27,7 @@ Skyrim 1.6.1170
 Skyrim 1.7.104
 ```
 
-The archive contains dedicated SKSE DLL variants for both runtimes, compiled from the same STRPM v0.10.1 source. The selected runtime installs:
+The archive contains dedicated SKSE DLL variants for both runtimes, compiled from the same STRPM v0.11.0 source. The selected runtime installs:
 
 ```text
 Data/SKSE/Plugins/STRPluginMessagingAPI.dll
