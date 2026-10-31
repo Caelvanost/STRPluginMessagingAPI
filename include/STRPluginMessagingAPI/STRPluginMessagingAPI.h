@@ -17,6 +17,8 @@ namespace STRPM
     inline constexpr std::uint32_t kDiagnosticsVersion = 2;
     inline constexpr std::uint32_t kTransportInterfaceVersion = 1;
     inline constexpr std::uint32_t kProxyResolverVersion = 1;
+    inline constexpr std::uint32_t kInventoryInterfaceVersion = 1;
+    inline constexpr std::uint32_t kMaxInventoryEffects = 32;
     inline constexpr std::uint32_t kMaxChannelLength = 96;
     inline constexpr std::uint32_t kMaxPayloadBytes = 24 * 1024;
     inline constexpr char kQueryInterfaceExportName[] =
@@ -27,6 +29,8 @@ namespace STRPM
         "STRPM_QueryTransportInterface";
     inline constexpr char kQueryProxyResolverExportName[] =
         "STR_QueryPluginMessagingProxyResolver";
+    inline constexpr char kQueryInventoryExportName[] =
+        "STR_QueryPluginMessagingInventory";
 
     using ConnectionID = std::uint64_t;
     using ProxyFormID = std::uint32_t;
@@ -44,7 +48,10 @@ namespace STRPM
         kPayloadTooLarge = 7,
         kRateLimited = 8,
         kTransportError = 9,
-        kTargetNotFound = 10
+        kTargetNotFound = 10,
+        kBufferTooSmall = 11,
+        kBusy = 12,
+        kUnsupportedItem = 13
     };
 
     enum MessageFlags : std::uint32_t
@@ -213,6 +220,115 @@ namespace STRPM
             const char* displayName);
     };
 
+    struct InventoryGameId
+    {
+        std::uint32_t baseId{ 0 };
+        std::uint32_t modId{ 0 };
+    };
+
+    struct InventoryEffect
+    {
+        float magnitude{ 0.0f };
+        std::int32_t area{ 0 };
+        std::int32_t duration{ 0 };
+        float rawCost{ 0.0f };
+        InventoryGameId effectId{};
+    };
+
+    enum InventoryEntryFlags : std::uint32_t
+    {
+        kInventoryEntryNone = 0,
+        kInventoryEntryEnchantIsWeapon = 1u << 0,
+        kInventoryEntryEnchantRemoveOnUnequip = 1u << 1,
+        kInventoryEntryWorn = 1u << 2,
+        kInventoryEntryWornLeft = 1u << 3,
+        kInventoryEntryQuestItem = 1u << 4
+    };
+
+    struct InventoryEntry
+    {
+        InventoryGameId baseId{};
+        std::int32_t count{ 0 };
+
+        float extraCharge{ 0.0f };
+
+        InventoryGameId extraEnchantId{};
+        std::uint16_t extraEnchantCharge{ 0 };
+        std::uint16_t enchantEffectCount{ 0 };
+        InventoryEffect enchantEffects[kMaxInventoryEffects]{};
+
+        float extraHealth{ 0.0f };
+
+        InventoryGameId extraPoisonId{};
+        std::uint32_t extraPoisonCount{ 0 };
+
+        std::int32_t extraSoulLevel{ 0 };
+        std::uint32_t flags{ kInventoryEntryNone };
+    };
+
+    // localBaseFormID is only meaningful on the current client and is never
+    // transmitted. entry is the portable STR Inventory::Entry representation.
+    struct InventoryItem
+    {
+        std::uint32_t localBaseFormID{ 0 };
+        InventoryEntry entry{};
+    };
+
+    using InventoryTransferID = std::uint64_t;
+
+    enum class InventoryTransferState : std::uint32_t
+    {
+        kPrepared = 1,
+        kRemovingLocal = 2,
+        kCommitting = 3,
+        kApplyingRemote = 4,
+        kComplete = 5,
+        kFailed = 6,
+        kRolledBack = 7
+    };
+
+    struct InventoryTransferEvent
+    {
+        InventoryTransferID transferID{ 0 };
+        ConnectionID peerConnectionID{ 0 };
+        InventoryTransferState state{ InventoryTransferState::kPrepared };
+        Result result{ Result::kOk };
+        InventoryEntry entry{};
+    };
+
+    using InventoryTransferCallback = void(STRPM_CALL*)(
+        const InventoryTransferEvent* event,
+        void* userData);
+
+    struct InventoryInterface
+    {
+        std::uint32_t version{ kInventoryInterfaceVersion };
+
+        // Two-call pattern: call with items=nullptr/capacity=0 to obtain the
+        // required item count, then call again with a sufficiently large buffer.
+        Result(STRPM_CALL* getLocalInventory)(
+            InventoryItem* items,
+            std::size_t capacity,
+            std::size_t* inOutCount);
+
+        // Starts an asynchronous owner-to-owner transfer. The sender removes the
+        // item locally through STR's native Inventory::Entry path; the recipient
+        // then applies the same canonical entry locally. Consumers never handle
+        // Skyrim ExtraDataList objects.
+        Result(STRPM_CALL* transfer)(
+            ConnectionID recipientConnectionID,
+            const InventoryEntry* entry,
+            InventoryTransferID* outTransferID);
+
+        Result(STRPM_CALL* registerTransferListener)(
+            InventoryTransferCallback callback,
+            void* userData);
+
+        Result(STRPM_CALL* unregisterTransferListener)(
+            InventoryTransferCallback callback,
+            void* userData);
+    };
+
     struct ProxyResolverInterface
     {
         std::uint32_t version{ kProxyResolverVersion };
@@ -246,6 +362,10 @@ namespace STRPM
         std::uint32_t requestedVersion,
         const ProxyResolverInterface** outInterface);
 
+    using QueryInventoryInterfaceFn = Result(STRPM_CALL*)(
+        std::uint32_t requestedVersion,
+        const InventoryInterface** outInterface);
+
     [[nodiscard]] const Interface* LoadFromModule(
         const wchar_t* moduleName = L"STRPluginMessagingAPI.dll") noexcept;
 
@@ -257,6 +377,9 @@ namespace STRPM
 
     [[nodiscard]] const ProxyResolverInterface* LoadProxyResolverFromModule(
         const wchar_t* moduleName = L"STRPluginMessagingAPI.dll") noexcept;
+
+    [[nodiscard]] const InventoryInterface* LoadInventoryFromModule(
+        const wchar_t* moduleName = L"STRPluginMessagingBridge.dll") noexcept;
 
     [[nodiscard]] const char* ResultToString(Result result) noexcept;
 }
