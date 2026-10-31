@@ -1,5 +1,6 @@
 #include "STRPluginMessagingBridgeReceive.h"
 #include "STRPMSTRCompatibility.h"
+#include "STRPMServerModMap.h"
 
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -36,6 +37,7 @@ namespace STRPMBridgeReceive
         // Official TiltedEvolution v1.8.4 Code/encoding/Opcodes.h.
         constexpr std::uint8_t kNotifyChatMessageBroadcastOpcode =
             STRPMSTRCompatibility::kNotifyChatMessageBroadcastOpcode;
+        constexpr std::uint8_t kAuthenticationResponseOpcode = 0;
 
         constexpr std::size_t kMaxFragments = 64;
         constexpr std::size_t kMaxPendingMessages = 128;
@@ -106,6 +108,14 @@ namespace STRPMBridgeReceive
             std::array<std::uint8_t, kMaxCapturedPacketBytes> bytes{};
         };
 
+        struct AuthenticationCapture
+        {
+            // 0 = free, 1 = producer writing, 2 = ready for dispatcher.
+            std::atomic<std::uint32_t> state{ 0 };
+            std::uint32_t size{ 0 };
+            std::array<std::uint8_t, kMaxPacketBytes> bytes{};
+        };
+
         STRPM::ReceiveCallback g_callback = nullptr;
         void* g_userData = nullptr;
         std::mutex g_pendingLock;
@@ -117,6 +127,10 @@ namespace STRPMBridgeReceive
         std::atomic<std::uint32_t> g_captureDropped{ 0 };
         std::atomic_bool g_captureDispatchRunning{ false };
         std::thread g_captureDispatchThread;
+
+        AuthenticationCapture g_authCapture{};
+        std::mutex g_serverModsMutex;
+        std::vector<STRPMServerModMap::Entry> g_serverMods;
 
         std::uintptr_t g_onConsumeAddress = 0;
         std::uint8_t g_originalByte = 0;
@@ -611,6 +625,91 @@ namespace STRPMBridgeReceive
                 length);
         }
 
+        bool ReadBool(LocalReader& reader, bool& value) noexcept
+        {
+            std::uint64_t raw = 0;
+            if (!ReadBits(reader, raw, 1))
+                return false;
+            value = raw != 0;
+            return true;
+        }
+
+        bool ParseAuthenticationModMap(
+            const std::uint8_t* bytes,
+            std::size_t size,
+            std::vector<STRPMServerModMap::Entry>& outEntries) noexcept
+        {
+            outEntries.clear();
+            if (!bytes || size == 0 || size > kMaxPacketBytes)
+                return false;
+
+            std::vector<std::uint8_t> packet;
+            try
+            {
+                packet.assign(bytes, bytes + size);
+            }
+            catch (...)
+            {
+                return false;
+            }
+
+            LocalReader reader{ 0, &packet };
+            std::uint64_t opcode = 0;
+            std::uint64_t responseType = 0;
+            bool skseActive = false;
+            bool mo2Active = false;
+            std::string version;
+
+            if (!ReadBits(reader, opcode, 8) ||
+                opcode != kAuthenticationResponseOpcode ||
+                !ReadVarInt(reader, responseType) ||
+                responseType != 0 ||
+                !ReadBool(reader, skseActive) ||
+                !ReadBool(reader, mo2Active) ||
+                !ReadString(reader, version))
+            {
+                return false;
+            }
+
+            std::uint64_t modCountRaw = 0;
+            if (!ReadBits(reader, modCountRaw, 13))
+                return false;
+            const auto modCount = static_cast<std::size_t>(modCountRaw & 0x1FFFu);
+            if (modCount > 4096)
+                return false;
+
+            try
+            {
+                outEntries.reserve(modCount);
+            }
+            catch (...)
+            {
+                return false;
+            }
+
+            for (std::size_t i = 0; i < modCount; ++i)
+            {
+                std::uint64_t idRaw = 0;
+                bool isLite = false;
+                std::string filename;
+                if (!ReadBits(reader, idRaw, 16) ||
+                    !ReadBool(reader, isLite) ||
+                    !ReadString(reader, filename))
+                {
+                    outEntries.clear();
+                    return false;
+                }
+
+                outEntries.push_back({
+                    static_cast<std::uint16_t>(idRaw & 0xFFFFu),
+                    isLite,
+                    std::move(filename)
+                });
+            }
+
+            return true;
+        }
+
         bool PeekRawChatEnvelope(
             const void* packetData,
             std::uint32_t packetSize,
@@ -694,6 +793,83 @@ namespace STRPMBridgeReceive
                 return false;
 
             return std::memcmp(bytes + position, kEnvelopePrefix.data(), kEnvelopePrefix.size()) == 0;
+        }
+
+        void TryCaptureAuthenticationResponse(
+            const void* packetData,
+            std::uint32_t packetSize) noexcept
+        {
+            if (!packetData || packetSize == 0 || packetSize > kMaxPacketBytes)
+                return;
+
+            std::uint8_t opcode = 0;
+            if (!ReadProcessValue(reinterpret_cast<std::uintptr_t>(packetData), opcode) ||
+                opcode != kAuthenticationResponseOpcode)
+            {
+                return;
+            }
+
+            std::uint32_t expected = 0;
+            if (!g_authCapture.state.compare_exchange_strong(
+                    expected,
+                    1,
+                    std::memory_order_acq_rel,
+                    std::memory_order_relaxed))
+            {
+                return;
+            }
+
+            g_authCapture.size = 0;
+            if (!ReadProcessBytes(
+                    reinterpret_cast<std::uintptr_t>(packetData),
+                    g_authCapture.bytes.data(),
+                    packetSize))
+            {
+                g_authCapture.state.store(0, std::memory_order_release);
+                return;
+            }
+
+            g_authCapture.size = packetSize;
+            g_authCapture.state.store(2, std::memory_order_release);
+        }
+
+        void DispatchAuthenticationCapture() noexcept
+        {
+            std::uint32_t expected = 2;
+            if (!g_authCapture.state.compare_exchange_strong(
+                    expected,
+                    1,
+                    std::memory_order_acq_rel,
+                    std::memory_order_relaxed))
+            {
+                return;
+            }
+
+            std::vector<STRPMServerModMap::Entry> parsed;
+            if (ParseAuthenticationModMap(
+                    g_authCapture.bytes.data(),
+                    g_authCapture.size,
+                    parsed))
+            {
+                {
+                    std::scoped_lock lock(g_serverModsMutex);
+                    g_serverMods = std::move(parsed);
+                }
+
+                FILE* file = nullptr;
+                fopen_s(&file, "Data\\SKSE\\Plugins\\STRPluginMessagingBridge.log", "a");
+                if (file)
+                {
+                    std::fprintf(
+                        file,
+                        "STRPM inventory bridge captured authenticated server mod map: %zu entries\n",
+                        g_serverMods.size());
+                    std::fclose(file);
+                }
+            }
+
+            g_authCapture.size = 0;
+            g_authCapture.state.store(0, std::memory_order_release);
         }
 
         CapturedPacket* ReserveCaptureSlot() noexcept
@@ -966,6 +1142,8 @@ namespace STRPMBridgeReceive
 
             while (g_captureDispatchRunning.load(std::memory_order_acquire))
             {
+                DispatchAuthenticationCapture();
+
                 auto* slot = FindNextReadyCapture();
                 if (!slot)
                 {
@@ -1039,6 +1217,12 @@ namespace STRPMBridgeReceive
             g_captureOrder.store(1, std::memory_order_relaxed);
             g_captureProbe.store(0, std::memory_order_relaxed);
             g_captureDropped.store(0, std::memory_order_relaxed);
+            g_authCapture.size = 0;
+            g_authCapture.state.store(0, std::memory_order_relaxed);
+            {
+                std::scoped_lock lock(g_serverModsMutex);
+                g_serverMods.clear();
+            }
             for (auto& slot : g_captureQueue)
             {
                 slot.size = 0;
@@ -1092,6 +1276,12 @@ namespace STRPMBridgeReceive
 
             const auto packetData = reinterpret_cast<const void*>(context->Rdx);
             const auto packetSize = static_cast<std::uint32_t>(context->R8 & 0xFFFFFFFFu);
+
+            // AuthenticationResponse is observed but never suppressed. It carries
+            // the authenticated server mod-id table required to translate local
+            // Skyrim FormIDs into STR GameIds for portable inventory entries.
+            TryCaptureAuthenticationResponse(packetData, packetSize);
+
             if (TryCaptureSTRPMPacket(packetData, packetSize))
             {
                 // The VEH does not parse fields, reconstruct fragments, log, lock,
@@ -1212,6 +1402,12 @@ namespace STRPMBridgeReceive
         g_rearmAfterSingleStep = false;
         g_suppressedLogCount.store(0);
         g_captureDropped.store(0);
+        g_authCapture.size = 0;
+        g_authCapture.state.store(0, std::memory_order_relaxed);
+        {
+            std::scoped_lock lock(g_serverModsMutex);
+            g_serverMods.clear();
+        }
     }
 
     bool IsResolved() noexcept
