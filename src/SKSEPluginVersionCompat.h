@@ -44,4 +44,5 @@ namespace STRPMSKSE
     inline constexpr std::uint32_t kPluginVersion_0_10_0 = 0x000A0000;
     inline constexpr std::uint32_t kPluginVersion_0_10_1 = 0x000A0001;
     inline constexpr std::uint32_t kPluginVersion_0_11_0 = 0x000B0000;
+    inline constexpr std::uint32_t kPluginVersion_0_12_0 = 0x000C0000;
 }
