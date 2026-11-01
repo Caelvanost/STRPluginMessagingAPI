@@ -1,4 +1,4 @@
-# STRPM Inventory Bridge v1
+# STRPM Inventory Bridge v2
 
 The inventory bridge is an experimental STRPM service that exposes Skyrim Together Reborn 1.8.4's canonical `Inventory::Entry` representation to consumer SKSE mods without exposing Skyrim `ExtraDataList` objects.
 
@@ -9,7 +9,7 @@ It is developed on the `inventory-service` branch as **STRPM 0.11.0**.
 STRPM owns:
 
 - translating the local Skyrim inventory into portable STR-style entries;
-- preserving supported instance data such as temper/health, charge, poison, soul and custom enchant effects;
+- preserving supported instance data such as temper/health, charge, poison, soul, custom enchant effects, custom display names, ownership/rank and `CannotWear`;
 - translating local FormIDs through the authenticated STR server mod table;
 - owner-to-owner transfer coordination;
 - applying local inventory mutations through STR 1.8.4's own `TESObjectREFR::AddOrRemoveItem(Inventory::Entry)` path.
@@ -55,7 +55,7 @@ Each `InventoryItem` contains:
 - `localBaseFormID`: local-only FormID for UI/game lookup;
 - `entry`: portable STRPM/STR inventory representation.
 
-The portable entry contains the STR `GameId`, count, charge, enchantment ID and charge, temporary enchant effects, temper/health, poison, soul and instance flags.
+The portable entry contains the STR `GameId`, count, charge, enchantment ID and charge, temporary enchant effects, temper/health, poison, soul, custom display name, portable owner `GameId`, owner rank, `CannotWear` and instance flags.
 
 The snapshot must currently be requested from Skyrim's game thread.
 
@@ -112,7 +112,7 @@ STRPM observes the authenticated STR `AuthenticationResponse` and captures its s
 
 ## Current restrictions
 
-The first bridge version deliberately rejects:
+The bridge deliberately rejects:
 
 - temporary **base** forms (`GameId.ModId == UINT32_MAX`), because stock STR 1.8.4 does not carry enough recipe data to reconstruct arbitrary crafted temporary base objects on another client;
 - equipped/worn inventory instances;
@@ -129,3 +129,16 @@ These restrictions can be relaxed later as individual paths are validated.
 The underlying STRPM 0.10.1 messaging/ProxyResolver baseline remains runtime-validated on Skyrim 1.6.1170 + SKSE 2.2.8 + STR 1.8.4.
 
 The Inventory Bridge itself is **source-audited and compile-tested only until a two-client runtime test is completed**. Do not treat it as release-ready before that validation.
+
+## Extended instance data
+
+Inventory Interface v2 adds STRPM-owned fields that stock STR 1.8.4 does not carry in `Inventory::Entry`:
+
+- player-set custom display name (`ExtraTextDisplayData`);
+- ownership (`ExtraOwnership`) using a portable STR `GameId`;
+- owner rank (`ExtraRank`);
+- `CannotWear` (`ExtraCannotWear`).
+
+For entries using any of these fields, STRPM removes the exact matching local `ExtraDataList` rather than asking STR to remove an ambiguous equivalent stack. On the recipient, STRPM asks STR to reconstruct the normal `Inventory::Entry` extra data, augments that list with the STRPM-owned fields, then adds the item through Skyrim's container path so STR's inventory hooks still observe the mutation.
+
+The inventory wire channel for this ABI is `strpm.inventory.v2`. Builds using the earlier experimental v1 layout are intentionally incompatible.
