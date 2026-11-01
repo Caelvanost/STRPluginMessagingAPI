@@ -17,7 +17,7 @@ namespace STRPM
     inline constexpr std::uint32_t kDiagnosticsVersion = 2;
     inline constexpr std::uint32_t kTransportInterfaceVersion = 1;
     inline constexpr std::uint32_t kProxyResolverVersion = 1;
-    inline constexpr std::uint32_t kInventoryInterfaceVersion = 1;
+    inline constexpr std::uint32_t kInventoryInterfaceVersion = 2;
     inline constexpr std::uint32_t kMaxInventoryEffects = 32;
     inline constexpr std::uint32_t kMaxInventoryCustomNameBytes = 512;
     inline constexpr std::uint32_t kMaxChannelLength = 96;
