@@ -471,7 +471,7 @@ extern "C" __declspec(dllexport) bool SKSEPlugin_Load(const SKSEInterface*)
         fopen_s(&file, "Data\\SKSE\\Plugins\\STRPluginMessagingDiagnostic.log", "w");
         if (file)
         {
-            std::fprintf(file, "STRPluginMessagingDiagnostic v0.12.0: SKSEPlugin_Load entered\n");
+            std::fprintf(file, "STRPluginMessagingDiagnostic v0.11.1: SKSEPlugin_Load entered\n");
             std::fclose(file);
         }
     }
