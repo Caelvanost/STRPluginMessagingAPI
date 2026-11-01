@@ -856,7 +856,7 @@ namespace STRPMInventoryBridge
                 if (!name)
                     name = "";
 
-                const auto length = std::strnlen(
+                const auto length = strnlen_s(
                     name,
                     STRPM::kMaxInventoryCustomNameBytes);
                 if (length >= STRPM::kMaxInventoryCustomNameBytes)
@@ -974,7 +974,7 @@ namespace STRPMInventoryBridge
                 if (entry.customNameLength >=
                         STRPM::kMaxInventoryCustomNameBytes ||
                     entry.customName[entry.customNameLength] != '\0' ||
-                    std::strnlen(
+                    strnlen_s(
                         entry.customName,
                         STRPM::kMaxInventoryCustomNameBytes) !=
                         entry.customNameLength)
@@ -1263,6 +1263,281 @@ namespace STRPMInventoryBridge
                 }
             }
             return count;
+        }
+
+        STRPM::Result ApplySTRPMExtendedData(
+            const STRPM::InventoryEntry& entry,
+            RE::ExtraDataList*& extraData)
+        {
+            if (!HasSTRPMExtendedData(entry))
+                return STRPM::Result::kOk;
+
+            RE::TESForm* owner = nullptr;
+            if ((entry.flags & STRPM::kInventoryEntryHasOwnership) != 0)
+            {
+                std::uint32_t ownerFormID = 0;
+                if (!ResolveGameIdToLocalFormID(
+                        entry.ownerId,
+                        ownerFormID))
+                {
+                    return STRPM::Result::kUnsupportedItem;
+                }
+
+                owner = RE::TESForm::LookupByID(ownerFormID);
+                if (!owner)
+                    return STRPM::Result::kUnsupportedItem;
+            }
+
+            try
+            {
+                if (!extraData)
+                    extraData = new RE::ExtraDataList();
+
+                if ((entry.flags &
+                        STRPM::kInventoryEntryHasCustomName) != 0)
+                {
+                    extraData->Add(
+                        new RE::ExtraTextDisplayData(
+                            entry.customName));
+                }
+
+                if (owner)
+                {
+                    extraData->Add(
+                        new RE::ExtraOwnership(owner));
+                }
+
+                if ((entry.flags &
+                        STRPM::kInventoryEntryHasOwnerRank) != 0)
+                {
+                    extraData->Add(
+                        new RE::ExtraRank(entry.ownerRank));
+                }
+
+                if ((entry.flags &
+                        STRPM::kInventoryEntryCannotWear) != 0)
+                {
+                    extraData->Add(
+                        new RE::ExtraCannotWear());
+                }
+            }
+            catch (...)
+            {
+                return STRPM::Result::kTransportError;
+            }
+
+            return STRPM::Result::kOk;
+        }
+
+        STRPM::Result AddLocalEntry(
+            const STRPM::InventoryEntry& entry,
+            std::int32_t count)
+        {
+            if (count <= 0)
+                return STRPM::Result::kInvalidArgument;
+
+            Native::Entry nativeEntry{};
+            try
+            {
+                const auto converted =
+                    Native::ToNative(entry, nativeEntry);
+                if (converted != STRPM::Result::kOk)
+                    return converted;
+            }
+            catch (...)
+            {
+                return STRPM::Result::kTransportError;
+            }
+
+            nativeEntry.Count = count;
+
+            auto* player = RE::PlayerCharacter::GetSingleton();
+            if (!player)
+                return STRPM::Result::kNotAvailable;
+
+            if (!HasSTRPMExtendedData(entry))
+            {
+                return InvokeAddOrRemoveItem(
+                           player,
+                           &nativeEntry) ?
+                    STRPM::Result::kOk :
+                    STRPM::Result::kTransportError;
+            }
+
+            std::uint32_t localBaseFormID = 0;
+            if (!ResolveGameIdToLocalFormID(
+                    entry.baseId,
+                    localBaseFormID))
+            {
+                return STRPM::Result::kTargetNotFound;
+            }
+
+            auto* object =
+                RE::TESForm::LookupByID<RE::TESBoundObject>(
+                    localBaseFormID);
+            if (!object)
+                return STRPM::Result::kTargetNotFound;
+
+            RE::ExtraDataList* extraData =
+                InvokeGetExtraDataFromItem(&nativeEntry);
+            const auto extended =
+                ApplySTRPMExtendedData(entry, extraData);
+            if (extended != STRPM::Result::kOk)
+                return extended;
+            if (!extraData)
+                return STRPM::Result::kTransportError;
+
+            try
+            {
+                player->AddObjectToContainer(
+                    object,
+                    extraData,
+                    count,
+                    nullptr);
+            }
+            catch (...)
+            {
+                return STRPM::Result::kTransportError;
+            }
+            return STRPM::Result::kOk;
+        }
+
+        bool BuildPublicEntryFromExtraData(
+            const STRPM::InventoryGameId& baseId,
+            RE::ExtraDataList* extraData,
+            STRPM::InventoryEntry& outEntry)
+        {
+            if (!extraData)
+                return false;
+
+            Native::Entry nativeEntry{};
+            nativeEntry.BaseId = Native::ToNative(baseId);
+            nativeEntry.Count = 1;
+            if (!InvokeGetItemFromExtraData(
+                    &nativeEntry,
+                    extraData) ||
+                nativeEntry.Count <= 0)
+            {
+                return false;
+            }
+
+            if (Native::ToPublic(
+                    nativeEntry,
+                    outEntry) != STRPM::Result::kOk)
+            {
+                return false;
+            }
+
+            return ReadSTRPMExtendedData(
+                       extraData,
+                       outEntry) == STRPM::Result::kOk;
+        }
+
+        STRPM::Result RemoveLocalEntry(
+            const STRPM::InventoryEntry& entry,
+            std::int32_t count)
+        {
+            if (count <= 0)
+                return STRPM::Result::kInvalidArgument;
+
+            auto* player = RE::PlayerCharacter::GetSingleton();
+            if (!player)
+                return STRPM::Result::kNotAvailable;
+
+            if (!HasSTRPMExtendedData(entry))
+            {
+                Native::Entry nativeEntry{};
+                try
+                {
+                    const auto converted =
+                        Native::ToNative(entry, nativeEntry);
+                    if (converted != STRPM::Result::kOk)
+                        return converted;
+                }
+                catch (...)
+                {
+                    return STRPM::Result::kTransportError;
+                }
+
+                nativeEntry.Count = -count;
+                return InvokeAddOrRemoveItem(
+                           player,
+                           &nativeEntry) ?
+                    STRPM::Result::kOk :
+                    STRPM::Result::kTransportError;
+            }
+
+            std::uint32_t localBaseFormID = 0;
+            if (!ResolveGameIdToLocalFormID(
+                    entry.baseId,
+                    localBaseFormID))
+            {
+                return STRPM::Result::kTargetNotFound;
+            }
+
+            std::int32_t remaining = count;
+            while (remaining > 0)
+            {
+                bool removed = false;
+                auto inventory = player->GetInventory();
+                for (auto& [object, data] : inventory)
+                {
+                    if (!object ||
+                        object->GetFormID() != localBaseFormID)
+                    {
+                        continue;
+                    }
+
+                    auto* entryData = data.second.get();
+                    if (!entryData || !entryData->extraLists)
+                        continue;
+
+                    for (auto* extraData : *entryData->extraLists)
+                    {
+                        STRPM::InventoryEntry candidate{};
+                        if (!BuildPublicEntryFromExtraData(
+                                entry.baseId,
+                                extraData,
+                                candidate) ||
+                            !EntriesEquivalentIgnoringCount(
+                                candidate,
+                                entry))
+                        {
+                            continue;
+                        }
+
+                        const auto available =
+                            std::max(1, candidate.count);
+                        const auto removeCount =
+                            std::min(remaining, available);
+                        try
+                        {
+                            player->RemoveItem(
+                                object,
+                                removeCount,
+                                RE::ITEM_REMOVE_REASON::kRemove,
+                                extraData,
+                                nullptr);
+                        }
+                        catch (...)
+                        {
+                            return STRPM::Result::kTransportError;
+                        }
+
+                        remaining -= removeCount;
+                        removed = true;
+                        break;
+                    }
+
+                    if (removed)
+                        break;
+                }
+
+                if (!removed)
+                    return STRPM::Result::kTargetNotFound;
+            }
+
+            return STRPM::Result::kOk;
         }
 
         void NotifyTransferEvent(
