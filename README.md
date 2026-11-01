@@ -2,7 +2,7 @@
 
 Shared messaging and STR player-proxy resolution for Skyrim Together Reborn compatibility mods.
 
-Current development version: **v0.11.5**.
+Current development version: **v0.11.6**.
 
 STRPluginMessagingAPI gives SKSE mods one common layer over the **Skyrim Together Reborn 1.8.4 connection**. It is intended for mods such as AnimSyncTogether, OStimTogether, MorphSyncTogether, IEDSyncTogether and TradeTogether so each project does not need to duplicate networking or guess which Skyrim Actor represents a remote STR player.
 
@@ -23,6 +23,10 @@ official STR server + strpm-chat-relay Lua resource
 ```
 
 STRPM payloads use reserved `STRPM|v2|...` chat envelopes. The bridge intercepts those packets before STR's normal chat UI so transport packets do not appear as yellow chat messages. Ordinary STR chat remains untouched.
+
+## v0.11.6 — Rendered custom-name serialization fix
+
+v0.11.6 serializes the custom name exactly as Skyrim renders it for the concrete inventory instance (`ExtraDataList::GetDisplayName(object)`), then trims it to `customNameLength`. This preserves the player's visible capitalization while still excluding tempering suffixes. The receiver continues to rebuild the name through `ExtraTextDisplayData::SetName()`.
 
 ## v0.11.5 — Custom-name casing and apply verification fix
 
