@@ -43,8 +43,8 @@ namespace STRPMInventoryBridge
         using namespace std::chrono_literals;
         namespace Native = STRPMInventoryNative;
 
-        constexpr char kInventoryChannel[] = "strpm.inventory.v1";
-        constexpr std::uint32_t kWireMagic = 0x31564E49u; // "INV1"
+        constexpr char kInventoryChannel[] = "strpm.inventory.v2";
+        constexpr std::uint32_t kWireMagic = 0x32564E49u; // "INV2"
         constexpr std::uint16_t kWireVersion = 2;
         constexpr std::size_t kChunkBytes = 1u * 1024u * 1024u;
         constexpr auto kWorkerPoll = 250ms;
