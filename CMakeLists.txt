@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.21)
 
 project(
     STRPluginMessagingAPI
-    VERSION 0.11.4
+    VERSION 0.11.5
     LANGUAGES CXX
 )
 
