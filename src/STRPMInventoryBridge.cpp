@@ -845,12 +845,19 @@ namespace STRPMInventoryBridge
         bool HasNativeInstanceData(
             const STRPM::InventoryEntry& entry) noexcept
         {
+            const bool hasEnchantId =
+                entry.extraEnchantId.baseId != 0 ||
+                entry.extraEnchantId.modId != 0;
+            const bool hasPoisonId =
+                entry.extraPoisonId.baseId != 0 ||
+                entry.extraPoisonId.modId != 0;
+
             return entry.extraCharge != 0.0f ||
-                   !IsZeroGameId(entry.extraEnchantId) ||
+                   hasEnchantId ||
                    entry.enchantEffectCount != 0 ||
                    entry.extraEnchantCharge != 0 ||
                    entry.extraHealth != 0.0f ||
-                   !IsZeroGameId(entry.extraPoisonId) ||
+                   hasPoisonId ||
                    entry.extraPoisonCount != 0 ||
                    entry.extraSoulLevel != 0 ||
                    (entry.flags & (
