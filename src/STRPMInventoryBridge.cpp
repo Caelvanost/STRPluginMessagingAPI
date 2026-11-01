@@ -842,6 +842,32 @@ namespace STRPMInventoryBridge
             return (entry.flags & kSTRPMExtendedEntryFlags) != 0;
         }
 
+        bool HasNativeInstanceData(
+            const STRPM::InventoryEntry& entry) noexcept
+        {
+            return entry.extraCharge != 0.0f ||
+                   !IsZeroGameId(entry.extraEnchantId) ||
+                   entry.enchantEffectCount != 0 ||
+                   entry.extraEnchantCharge != 0 ||
+                   entry.extraHealth != 0.0f ||
+                   !IsZeroGameId(entry.extraPoisonId) ||
+                   entry.extraPoisonCount != 0 ||
+                   entry.extraSoulLevel != 0 ||
+                   (entry.flags & (
+                        STRPM::kInventoryEntryEnchantIsWeapon |
+                        STRPM::kInventoryEntryEnchantRemoveOnUnequip |
+                        STRPM::kInventoryEntryWorn |
+                        STRPM::kInventoryEntryWornLeft |
+                        STRPM::kInventoryEntryQuestItem)) != 0;
+        }
+
+        bool RequiresExactInstanceRemoval(
+            const STRPM::InventoryEntry& entry) noexcept
+        {
+            return HasNativeInstanceData(entry) ||
+                   HasSTRPMExtendedData(entry);
+        }
+
         STRPM::Result ReadSTRPMExtendedData(
             RE::ExtraDataList* extraData,
             STRPM::InventoryEntry& entry) noexcept
@@ -1486,7 +1512,7 @@ namespace STRPMInventoryBridge
             if (!player)
                 return STRPM::Result::kNotAvailable;
 
-            if (!HasSTRPMExtendedData(entry))
+            if (!RequiresExactInstanceRemoval(entry))
             {
                 Native::Entry nativeEntry{};
                 try
@@ -1516,6 +1542,15 @@ namespace STRPMInventoryBridge
             {
                 return STRPM::Result::kTargetNotFound;
             }
+
+            Log(
+                "STRPM inventory exact removal base=%08X:%08X count=%d health=%.9g flags=0x%08X extended=%d",
+                entry.baseId.modId,
+                entry.baseId.baseId,
+                count,
+                static_cast<double>(entry.extraHealth),
+                entry.flags,
+                HasSTRPMExtendedData(entry) ? 1 : 0);
 
             std::int32_t remaining = count;
             while (remaining > 0)
@@ -1576,7 +1611,15 @@ namespace STRPMInventoryBridge
                 }
 
                 if (!removed)
+                {
+                    Log(
+                        "STRPM inventory exact removal could not find matching instance base=%08X:%08X health=%.9g flags=0x%08X",
+                        entry.baseId.modId,
+                        entry.baseId.baseId,
+                        static_cast<double>(entry.extraHealth),
+                        entry.flags);
                     return STRPM::Result::kTargetNotFound;
+                }
             }
 
             return STRPM::Result::kOk;
