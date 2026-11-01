@@ -28,6 +28,12 @@ STRPM payloads use reserved `STRPM|v2|...` chat envelopes. The bridge intercepts
 
 v0.11.3 fixes false transfer failures for altered or extended inventory stacks. Skyrim can defer visibility of an ExtraData-backed `RemoveItem` mutation until the next game-task tick. STRPM now performs the post-removal inventory verification on the next task tick before committing or rolling back, preserving the anti-duplication check without rejecting a successful removal as `kTransportError`.
 
+## v0.11.3 — Tempered item exact-instance transfer fix
+
+v0.11.3 fixes transfers of forge-improved/tempered equipment. Items carrying native instance data such as `ExtraHealth` now use exact `ExtraDataList` removal on the source client instead of asking STR/Skyrim to reconstruct and match an equivalent instance before removal.
+
+This applies to all native per-instance metadata (charge, enchantment, temper/health, poison, soul, etc.) as well as the STRPM-owned custom-name/ownership/rank/`CannotWear` extensions.
+
 ## v0.11.2 — ExtraDataList allocation fix
 
 v0.11.2 fixes the extended Inventory Bridge build/runtime path by allocating empty instance-data lists through STR's own native `GetExtraDataFromItem` path instead of the non-linkable CommonLibSSE `ExtraDataList` constructor. STRPM seeds a temporary health node only to make STR allocate the list, removes that sentinel immediately, then applies the STRPM-owned metadata.
