@@ -24,15 +24,15 @@ official STR server + strpm-chat-relay Lua resource
 
 STRPM payloads use reserved `STRPM|v2|...` chat envelopes. The bridge intercepts those packets before STR's normal chat UI so transport packets do not appear as yellow chat messages. Ordinary STR chat remains untouched.
 
-## v0.11.4 — Deferred extended removal verification
+## v0.11.4 — Custom-name exact matching fix
 
-v0.11.4 fixes false transfer failures for altered or extended inventory stacks. Skyrim can defer visibility of an ExtraData-backed `RemoveItem` mutation until the next game-task tick. STRPM now performs the post-removal inventory verification on the next task tick before committing or rolling back, preserving the anti-duplication check without rejecting a successful removal as `kTransportError`.
+v0.11.4 fixes player-renamed item matching in Inventory Bridge v2. Skyrim's `ExtraTextDisplayData` can expose a backing display-name buffer longer than the logical player-set name indicated by `customNameLength`. STRPM now serializes the exact logical custom-name slice, applies the same control-character sanitization used by TradeTogether, and ignores quest/text-display variants that are not player-set custom names.
 
-## v0.11.4 — Tempered item exact-instance transfer fix
+## v0.11.3 — Extended and tempered item transfer fixes
 
-v0.11.4 fixes transfers of forge-improved/tempered equipment. Items carrying native instance data such as `ExtraHealth` now use exact `ExtraDataList` removal on the source client instead of asking STR/Skyrim to reconstruct and match an equivalent instance before removal.
+v0.11.3 fixes transfers of forge-improved/tempered and other ExtraData-backed equipment. Exact `ExtraDataList` removal is used for per-instance metadata, and post-removal inventory verification is deferred to the next game-task tick so Skyrim has time to reflect the mutation before STRPM decides whether to commit or roll back.
 
-This applies to all native per-instance metadata (charge, enchantment, temper/health, poison, soul, etc.) as well as the STRPM-owned custom-name/ownership/rank/`CannotWear` extensions.
+This applies to native instance data such as charge, enchantment, temper/health, poison and soul, as well as the STRPM-owned custom-name/ownership/rank/`CannotWear` extensions.
 
 ## v0.11.2 — ExtraDataList allocation fix
 
