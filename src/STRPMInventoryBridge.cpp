@@ -1645,32 +1645,18 @@ namespace STRPMInventoryBridge
             if (!found)
                 return;
 
-            Native::Entry nativeEntry{};
-            try
+            const auto restored = AddLocalEntry(
+                transaction.entry,
+                std::abs(transaction.entry.count));
+            if (restored != STRPM::Result::kOk)
             {
-                if (Native::ToNative(
-                        transaction.entry,
-                        nativeEntry) != STRPM::Result::kOk)
-                {
-                    FailOutgoing(
-                        transferID,
-                        failureResult);
-                    return;
-                }
-            }
-            catch (...)
-            {
-                FailOutgoing(
-                    transferID,
-                    failureResult);
+                Log(
+                    "STRPM inventory rollback failed transfer=%llu result=%u",
+                    static_cast<unsigned long long>(transferID),
+                    static_cast<unsigned>(restored));
+                FailOutgoing(transferID, failureResult);
                 return;
             }
-
-            nativeEntry.Count =
-                std::abs(transaction.entry.count);
-            auto* player = RE::PlayerCharacter::GetSingleton();
-            if (player)
-                InvokeAddOrRemoveItem(player, &nativeEntry);
 
             {
                 std::scoped_lock lock(g_transactionMutex);
@@ -1715,49 +1701,20 @@ namespace STRPMInventoryBridge
                 return;
             }
 
-            Native::Entry nativeEntry{};
-            try
-            {
-                if (Native::ToNative(
-                        transaction.entry,
-                        nativeEntry) != STRPM::Result::kOk)
-                {
-                    SendWire(
-                        transaction.peer,
-                        WireType::kAbort,
-                        transferID,
-                        transaction.entry,
-                        STRPM::Result::kUnsupportedItem);
-                    FailOutgoing(
-                        transferID,
-                        STRPM::Result::kUnsupportedItem);
-                    return;
-                }
-            }
-            catch (...)
-            {
-                FailOutgoing(
-                    transferID,
-                    STRPM::Result::kTransportError);
-                return;
-            }
-
-            nativeEntry.Count =
-                -std::abs(transaction.entry.count);
-
-            auto* player = RE::PlayerCharacter::GetSingleton();
-            if (!player ||
-                !InvokeAddOrRemoveItem(player, &nativeEntry))
+            const auto removedResult = RemoveLocalEntry(
+                transaction.entry,
+                std::abs(transaction.entry.count));
+            if (removedResult != STRPM::Result::kOk)
             {
                 SendWire(
                     transaction.peer,
                     WireType::kAbort,
                     transferID,
                     transaction.entry,
-                    STRPM::Result::kTransportError);
+                    removedResult);
                 FailOutgoing(
                     transferID,
-                    STRPM::Result::kTransportError);
+                    removedResult);
                 return;
             }
 
@@ -1765,16 +1722,11 @@ namespace STRPMInventoryBridge
                 GetMatchingLocalCount(transaction.entry);
             if (after > available - transaction.entry.count)
             {
-                // The native call did not remove the requested exact instance.
-                // Re-add only what was observed as removed, if any.
                 const auto removed = std::max(
                     0,
                     available - after);
                 if (removed > 0)
-                {
-                    nativeEntry.Count = removed;
-                    InvokeAddOrRemoveItem(player, &nativeEntry);
-                }
+                    AddLocalEntry(transaction.entry, removed);
 
                 SendWire(
                     transaction.peer,
@@ -1802,8 +1754,6 @@ namespace STRPMInventoryBridge
                 transaction.entry);
             if (sent != STRPM::Result::kOk)
             {
-                // COMMIT was not accepted by STRPM transport, so the recipient
-                // cannot have observed it. A local rollback is safe here.
                 RollbackOutgoingOnGameThread(
                     transferID,
                     sent);
@@ -1836,48 +1786,19 @@ namespace STRPMInventoryBridge
                 transaction = it->second;
             }
 
-            Native::Entry nativeEntry{};
-            try
-            {
-                if (Native::ToNative(
-                        transaction.entry,
-                        nativeEntry) != STRPM::Result::kOk)
-                {
-                    SendWire(
-                        key.sender,
-                        WireType::kAbort,
-                        key.transferID,
-                        transaction.entry,
-                        STRPM::Result::kUnsupportedItem);
-                    return;
-                }
-            }
-            catch (...)
-            {
-                SendWire(
-                    key.sender,
-                    WireType::kAbort,
-                    key.transferID,
-                    transaction.entry,
-                    STRPM::Result::kTransportError);
-                return;
-            }
-
-            nativeEntry.Count =
-                std::abs(transaction.entry.count);
-
             const auto before =
                 GetMatchingLocalCount(transaction.entry);
-            auto* player = RE::PlayerCharacter::GetSingleton();
-            if (!player ||
-                !InvokeAddOrRemoveItem(player, &nativeEntry))
+            const auto addResult = AddLocalEntry(
+                transaction.entry,
+                std::abs(transaction.entry.count));
+            if (addResult != STRPM::Result::kOk)
             {
                 SendWire(
                     key.sender,
                     WireType::kAbort,
                     key.transferID,
                     transaction.entry,
-                    STRPM::Result::kTransportError);
+                    addResult);
                 return;
             }
 
@@ -1887,10 +1808,7 @@ namespace STRPMInventoryBridge
             {
                 const auto added = std::max(0, after - before);
                 if (added > 0)
-                {
-                    nativeEntry.Count = -added;
-                    InvokeAddOrRemoveItem(player, &nativeEntry);
-                }
+                    RemoveLocalEntry(transaction.entry, added);
 
                 SendWire(
                     key.sender,
@@ -2457,6 +2375,7 @@ namespace STRPMInventoryBridge
                 const auto now = std::chrono::steady_clock::now();
                 const bool nativeResolved =
                     g_getItemFromExtraDataAddress.load() != 0 &&
+                    g_getExtraDataFromItemAddress.load() != 0 &&
                     g_addOrRemoveItemAddress.load() != 0;
                 if (!nativeResolved &&
                     (nextResolveAttempt.time_since_epoch().count() == 0 ||
@@ -2481,6 +2400,7 @@ namespace STRPMInventoryBridge
                 const bool ready =
                     g_channelRegistered.load() &&
                     g_getItemFromExtraDataAddress.load() != 0 &&
+                    g_getExtraDataFromItemAddress.load() != 0 &&
                     g_addOrRemoveItemAddress.load() != 0;
                 g_ready.store(ready);
 
@@ -2688,6 +2608,7 @@ namespace STRPMInventoryBridge
 
         g_ready.store(false);
         g_getItemFromExtraDataAddress.store(0);
+        g_getExtraDataFromItemAddress.store(0);
         g_addOrRemoveItemAddress.store(0);
     }
 
