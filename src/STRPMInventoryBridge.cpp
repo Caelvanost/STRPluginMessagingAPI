@@ -45,7 +45,7 @@ namespace STRPMInventoryBridge
 
         constexpr char kInventoryChannel[] = "strpm.inventory.v1";
         constexpr std::uint32_t kWireMagic = 0x31564E49u; // "INV1"
-        constexpr std::uint16_t kWireVersion = 1;
+        constexpr std::uint16_t kWireVersion = 2;
         constexpr std::size_t kChunkBytes = 1u * 1024u * 1024u;
         constexpr auto kWorkerPoll = 250ms;
         constexpr auto kPrepareTimeout = 10s;
@@ -55,6 +55,8 @@ namespace STRPMInventoryBridge
 
         constexpr std::string_view kGetItemFromExtraDataAnchor =
             "Null enchantment in ExtraEnchantment";
+        constexpr std::string_view kGetExtraDataFromItemAnchor =
+            "No Enchantment created or found.";
         constexpr std::string_view kAddOrRemoveItemAnchor =
             "{}: Object to add not found, {:X}:{:X}.";
 
@@ -150,6 +152,7 @@ namespace STRPMInventoryBridge
         std::atomic_bool g_started{ false };
         std::atomic_bool g_ready{ false };
         std::atomic<std::uintptr_t> g_getItemFromExtraDataAddress{ 0 };
+        std::atomic<std::uintptr_t> g_getExtraDataFromItemAddress{ 0 };
         std::atomic<std::uintptr_t> g_addOrRemoveItemAddress{ 0 };
         std::atomic<STRPM::InventoryTransferID> g_nextTransferID{
             static_cast<STRPM::InventoryTransferID>(GetTickCount64()) << 20
@@ -514,6 +517,7 @@ namespace STRPMInventoryBridge
         bool ResolveNativeFunctions() noexcept
         {
             if (g_getItemFromExtraDataAddress.load() != 0 &&
+                g_getExtraDataFromItemAddress.load() != 0 &&
                 g_addOrRemoveItemAddress.load() != 0)
             {
                 return true;
@@ -530,20 +534,26 @@ namespace STRPMInventoryBridge
                     spans,
                     module,
                     kGetItemFromExtraDataAnchor);
+                const auto getExtraData = FindFunctionByAnchor(
+                    spans,
+                    module,
+                    kGetExtraDataFromItemAnchor);
                 const auto addOrRemove = FindFunctionByAnchor(
                     spans,
                     module,
                     kAddOrRemoveItemAnchor);
 
-                if (!getItem || !addOrRemove)
+                if (!getItem || !getExtraData || !addOrRemove)
                     return false;
 
                 g_getItemFromExtraDataAddress.store(getItem->begin);
+                g_getExtraDataFromItemAddress.store(getExtraData->begin);
                 g_addOrRemoveItemAddress.store(addOrRemove->begin);
 
                 Log(
-                    "STRPM inventory native bridge resolved: GetItemFromExtraData=0x%llX AddOrRemoveItem=0x%llX",
+                    "STRPM inventory native bridge resolved: GetItemFromExtraData=0x%llX GetExtraDataFromItem=0x%llX AddOrRemoveItem=0x%llX",
                     static_cast<unsigned long long>(getItem->begin),
+                    static_cast<unsigned long long>(getExtraData->begin),
                     static_cast<unsigned long long>(addOrRemove->begin));
                 return true;
             }
@@ -580,6 +590,32 @@ namespace STRPMInventoryBridge
 #else
             function(entry, extraData);
             return true;
+#endif
+        }
+
+        RE::ExtraDataList* InvokeGetExtraDataFromItem(
+            const Native::Entry* entry) noexcept
+        {
+            const auto address =
+                g_getExtraDataFromItemAddress.load();
+            if (!entry || address == 0)
+                return nullptr;
+
+            using Fn = RE::ExtraDataList*(__fastcall*)(
+                const Native::Entry*);
+            const auto function = reinterpret_cast<Fn>(address);
+
+#if defined(_MSC_VER)
+            __try
+            {
+                return function(entry);
+            }
+            __except (EXCEPTION_EXECUTE_HANDLER)
+            {
+                return nullptr;
+            }
+#else
+            return function(entry);
 #endif
         }
 
