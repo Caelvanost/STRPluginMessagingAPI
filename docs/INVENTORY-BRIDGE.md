@@ -1,8 +1,8 @@
-# STRPM Inventory Bridge v2 (STRPM 0.11.4)
+# STRPM Inventory Bridge v2 (STRPM 0.11.5)
 
 The inventory bridge is an experimental STRPM service that exposes Skyrim Together Reborn 1.8.4's canonical `Inventory::Entry` representation to consumer SKSE mods without exposing Skyrim `ExtraDataList` objects.
 
-It is developed on the `inventory-service` branch as **STRPM 0.11.4**.
+It is developed on the `inventory-service` branch as **STRPM 0.11.5**.
 
 ## Responsibility split
 
