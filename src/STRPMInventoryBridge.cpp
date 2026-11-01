@@ -1268,6 +1268,44 @@ namespace STRPMInventoryBridge
             return count;
         }
 
+        RE::ExtraDataList* BuildNativeExtraDataList(
+            const Native::Entry& entry) noexcept
+        {
+            if (auto* extraData =
+                    InvokeGetExtraDataFromItem(&entry))
+            {
+                return extraData;
+            }
+
+            // Stock STR returns nullptr when Inventory::Entry contains no
+            // native extra data. Extended STRPM-only metadata still needs a
+            // real Skyrim ExtraDataList, so force STR to allocate one with a
+            // harmless sentinel, then remove that sentinel immediately.
+            Native::Entry seededEntry{};
+            try
+            {
+                seededEntry = entry;
+                seededEntry.ExtraHealth = 1.0f;
+            }
+            catch (...)
+            {
+                return nullptr;
+            }
+
+            auto* extraData =
+                InvokeGetExtraDataFromItem(&seededEntry);
+            if (!extraData)
+                return nullptr;
+
+            if (!extraData->RemoveByType(
+                    RE::ExtraDataType::kHealth))
+            {
+                return nullptr;
+            }
+
+            return extraData;
+        }
+
         STRPM::Result ApplySTRPMExtendedData(
             const STRPM::InventoryEntry& entry,
             RE::ExtraDataList*& extraData)
@@ -1291,11 +1329,11 @@ namespace STRPMInventoryBridge
                     return STRPM::Result::kUnsupportedItem;
             }
 
+            if (!extraData)
+                return STRPM::Result::kTransportError;
+
             try
             {
-                if (!extraData)
-                    extraData = new RE::ExtraDataList();
-
                 if ((entry.flags &
                         STRPM::kInventoryEntryHasCustomName) != 0)
                 {
@@ -1382,7 +1420,7 @@ namespace STRPMInventoryBridge
                 return STRPM::Result::kTargetNotFound;
 
             RE::ExtraDataList* extraData =
-                InvokeGetExtraDataFromItem(&nativeEntry);
+                BuildNativeExtraDataList(nativeEntry);
             const auto extended =
                 ApplySTRPMExtendedData(entry, extraData);
             if (extended != STRPM::Result::kOk)
