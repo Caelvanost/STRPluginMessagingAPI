@@ -24,22 +24,23 @@ official STR server + strpm-chat-relay Lua resource
 
 STRPM payloads use reserved `STRPM|v2|...` chat envelopes. The bridge intercepts those packets before STR's normal chat UI so transport packets do not appear as yellow chat messages. Ordinary STR chat remains untouched.
 
-## v0.11.0 — Inventory Bridge v1
+## v0.11.0 — Inventory Bridge v2
 
 v0.11.0 adds a separate, versioned inventory API without changing the existing messaging API v2.
 
-The bridge converts the local Skyrim inventory into STR-compatible `Inventory::Entry` data and coordinates owner-to-owner transfers through the reserved `strpm.inventory.v1` channel. Consumer mods such as TradeTogether no longer need to inspect or rebuild Skyrim `ExtraDataList` structures.
+The bridge converts the local Skyrim inventory into STR-compatible `Inventory::Entry` data and coordinates owner-to-owner transfers through the reserved `strpm.inventory.v2` channel. Consumer mods such as TradeTogether no longer need to inspect or rebuild Skyrim `ExtraDataList` structures.
 
 Key properties:
 
 - local inventory snapshot with portable STR `GameId` values;
 - authenticated server mod-table mapping captured from STR's `AuthenticationResponse`;
 - STR-native extraction of charge, temper/health, poison, soul and temporary enchant effects;
+- STRPM extensions for custom display names, ownership/rank and `CannotWear`;
 - transfers apply through STR 1.8.4's native inventory add/remove path on each owning client;
 - two-phase PREPARE/READY/COMMIT/APPLIED coordination with duplicate-COMMIT suppression;
 - no automatic rollback after a COMMIT may have reached the recipient, preventing an uncertain ACK from creating a duplicate item.
 
-The service is exposed as `InventoryInterface v1` through `STR_QueryPluginMessagingInventory`.
+The service is exposed as `InventoryInterface v2` through `STR_QueryPluginMessagingInventory`.
 
 Implementation details and consumer usage are documented in `docs/INVENTORY-BRIDGE.md`.
 
