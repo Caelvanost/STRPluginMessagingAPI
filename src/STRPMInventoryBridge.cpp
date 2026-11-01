@@ -1180,6 +1180,10 @@ namespace STRPMInventoryBridge
                             if (!extraData)
                                 continue;
 
+                            const auto listCount =
+                                std::max(1, extraData->GetCount());
+                            remaining -= listCount;
+
                             Native::Entry nativeEntry{};
                             nativeEntry.BaseId =
                                 Native::ToNative(canonicalBase);
@@ -1216,7 +1220,6 @@ namespace STRPMInventoryBridge
                                 continue;
                             }
 
-                            remaining -= nativeEntry.Count;
                             MergeInventoryItem(
                                 outItems,
                                 std::move(item));
