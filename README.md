@@ -24,9 +24,13 @@ official STR server + strpm-chat-relay Lua resource
 
 STRPM payloads use reserved `STRPM|v2|...` chat envelopes. The bridge intercepts those packets before STR's normal chat UI so transport packets do not appear as yellow chat messages. Ordinary STR chat remains untouched.
 
-## v0.11.5 — Custom-name exact matching fix
+## v0.11.5 — Custom-name casing and apply verification fix
 
-v0.11.5 fixes player-renamed item matching in Inventory Bridge v2. Skyrim's `ExtraTextDisplayData` can expose a backing display-name buffer longer than the logical player-set name indicated by `customNameLength`. STRPM now serializes the exact logical custom-name slice, applies the same control-character sanitization used by TradeTogether, and ignores quest/text-display variants that are not player-set custom names.
+v0.11.5 fixes reconstruction of player-renamed items on the receiving client. STRPM now creates or reuses `ExtraTextDisplayData` and calls Skyrim's `SetName()` path instead of constructing `ExtraTextDisplayData` directly from the string. This preserves the original casing and makes the post-add exact-instance verification observe the same logical custom name, preventing the spurious `transport error` after a successful transfer.
+
+## v0.11.4 — Custom-name exact matching fix
+
+v0.11.4 fixes player-renamed item matching in Inventory Bridge v2. Skyrim's `ExtraTextDisplayData` can expose a backing display-name buffer longer than the logical player-set name indicated by `customNameLength`. STRPM now serializes the exact logical custom-name slice, applies the same control-character sanitization used by TradeTogether, and ignores quest/text-display variants that are not player-set custom names.
 
 ## v0.11.3 — Extended and tempered item transfer fixes
 
