@@ -105,6 +105,7 @@ namespace STRPMInventoryBridge
         {
             kAwaitReady,
             kRemoving,
+            kVerifyingRemoval,
             kAwaitApplied
         };
 
@@ -1711,6 +1712,90 @@ namespace STRPMInventoryBridge
                 transaction.entry);
         }
 
+        void VerifyRemovalAndCommitOnGameThread(
+            STRPM::InventoryTransferID transferID,
+            std::int32_t availableBefore)
+        {
+            OutgoingTransaction transaction{};
+            {
+                std::scoped_lock lock(g_transactionMutex);
+                const auto it = g_outgoing.find(transferID);
+                if (it == g_outgoing.end() ||
+                    it->second.phase !=
+                        OutgoingPhase::kVerifyingRemoval)
+                {
+                    return;
+                }
+                transaction = it->second;
+            }
+
+            const auto after =
+                GetMatchingLocalCount(transaction.entry);
+            const auto expectedMaximum =
+                availableBefore - transaction.entry.count;
+
+            Log(
+                "STRPM inventory removal verification transfer=%llu before=%d after=%d expectedMax=%d extended=%d",
+                static_cast<unsigned long long>(transferID),
+                availableBefore,
+                after,
+                expectedMaximum,
+                HasSTRPMExtendedData(transaction.entry) ? 1 : 0);
+
+            if (after > expectedMaximum)
+            {
+                const auto removed = std::max(
+                    0,
+                    availableBefore - after);
+                if (removed > 0)
+                    AddLocalEntry(transaction.entry, removed);
+
+                SendWire(
+                    transaction.peer,
+                    WireType::kAbort,
+                    transferID,
+                    transaction.entry,
+                    STRPM::Result::kTransportError);
+                FailOutgoing(
+                    transferID,
+                    STRPM::Result::kTransportError);
+                return;
+            }
+
+            NotifyTransferEvent(
+                transferID,
+                transaction.peer,
+                STRPM::InventoryTransferState::kCommitting,
+                STRPM::Result::kOk,
+                transaction.entry);
+
+            const auto sent = SendWire(
+                transaction.peer,
+                WireType::kCommit,
+                transferID,
+                transaction.entry);
+            if (sent != STRPM::Result::kOk)
+            {
+                RollbackOutgoingOnGameThread(
+                    transferID,
+                    sent);
+                return;
+            }
+
+            {
+                std::scoped_lock lock(g_transactionMutex);
+                const auto it = g_outgoing.find(transferID);
+                if (it != g_outgoing.end())
+                {
+                    it->second.phase =
+                        OutgoingPhase::kAwaitApplied;
+                    it->second.commitAttempts = 1;
+                    it->second.lastAction =
+                        std::chrono::steady_clock::now();
+                }
+            }
+        }
+
         void RemoveLocalAndCommitOnGameThread(
             STRPM::InventoryTransferID transferID)
         {
@@ -1759,60 +1844,36 @@ namespace STRPMInventoryBridge
                 return;
             }
 
-            const auto after =
-                GetMatchingLocalCount(transaction.entry);
-            if (after > available - transaction.entry.count)
-            {
-                const auto removed = std::max(
-                    0,
-                    available - after);
-                if (removed > 0)
-                    AddLocalEntry(transaction.entry, removed);
-
-                SendWire(
-                    transaction.peer,
-                    WireType::kAbort,
-                    transferID,
-                    transaction.entry,
-                    STRPM::Result::kTransportError);
-                FailOutgoing(
-                    transferID,
-                    STRPM::Result::kTransportError);
-                return;
-            }
-
-            NotifyTransferEvent(
-                transferID,
-                transaction.peer,
-                STRPM::InventoryTransferState::kCommitting,
-                STRPM::Result::kOk,
-                transaction.entry);
-
-            const auto sent = SendWire(
-                transaction.peer,
-                WireType::kCommit,
-                transferID,
-                transaction.entry);
-            if (sent != STRPM::Result::kOk)
-            {
-                RollbackOutgoingOnGameThread(
-                    transferID,
-                    sent);
-                return;
-            }
-
             {
                 std::scoped_lock lock(g_transactionMutex);
                 const auto it = g_outgoing.find(transferID);
-                if (it != g_outgoing.end())
-                {
-                    it->second.phase =
-                        OutgoingPhase::kAwaitApplied;
-                    it->second.commitAttempts = 1;
-                    it->second.lastAction =
-                        std::chrono::steady_clock::now();
-                }
+                if (it == g_outgoing.end())
+                    return;
+                it->second.phase =
+                    OutgoingPhase::kVerifyingRemoval;
+                it->second.lastAction =
+                    std::chrono::steady_clock::now();
             }
+
+            auto* taskInterface = SKSE::GetTaskInterface();
+            if (!taskInterface)
+            {
+                RollbackOutgoingOnGameThread(
+                    transferID,
+                    STRPM::Result::kNotAvailable);
+                return;
+            }
+
+            // ExtraData-backed RemoveItem mutations are not always visible to
+            // GetInventory() until the next game-task tick. Verify after the
+            // mutation has settled instead of treating the same-tick snapshot
+            // as an authoritative failure.
+            taskInterface->AddTask(
+                [transferID, available]() {
+                    VerifyRemovalAndCommitOnGameThread(
+                        transferID,
+                        available);
+                });
         }
 
         void ApplyRemoteOnGameThread(
