@@ -19,6 +19,7 @@ namespace STRPM
     inline constexpr std::uint32_t kProxyResolverVersion = 1;
     inline constexpr std::uint32_t kInventoryInterfaceVersion = 1;
     inline constexpr std::uint32_t kMaxInventoryEffects = 32;
+    inline constexpr std::uint32_t kMaxInventoryCustomNameBytes = 512;
     inline constexpr std::uint32_t kMaxChannelLength = 96;
     inline constexpr std::uint32_t kMaxPayloadBytes = 24 * 1024;
     inline constexpr char kQueryInterfaceExportName[] =
@@ -242,7 +243,11 @@ namespace STRPM
         kInventoryEntryEnchantRemoveOnUnequip = 1u << 1,
         kInventoryEntryWorn = 1u << 2,
         kInventoryEntryWornLeft = 1u << 3,
-        kInventoryEntryQuestItem = 1u << 4
+        kInventoryEntryQuestItem = 1u << 4,
+        kInventoryEntryHasCustomName = 1u << 5,
+        kInventoryEntryHasOwnership = 1u << 6,
+        kInventoryEntryHasOwnerRank = 1u << 7,
+        kInventoryEntryCannotWear = 1u << 8
     };
 
     struct InventoryEntry
@@ -264,6 +269,15 @@ namespace STRPM
 
         std::int32_t extraSoulLevel{ 0 };
         std::uint32_t flags{ kInventoryEntryNone };
+
+        // STRPM extensions not represented by stock STR 1.8.4 Inventory::Entry.
+        // customName contains raw Skyrim display-name bytes and is always
+        // NUL-terminated when kInventoryEntryHasCustomName is set.
+        InventoryGameId ownerId{};
+        std::int32_t ownerRank{ 0 };
+        std::uint16_t customNameLength{ 0 };
+        std::uint16_t reserved{ 0 };
+        char customName[kMaxInventoryCustomNameBytes]{};
     };
 
     // localBaseFormID is only meaningful on the current client and is never
