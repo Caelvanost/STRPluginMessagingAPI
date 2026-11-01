@@ -1408,9 +1408,23 @@ namespace STRPMInventoryBridge
                 if ((entry.flags &
                         STRPM::kInventoryEntryHasCustomName) != 0)
                 {
-                    extraData->Add(
-                        new RE::ExtraTextDisplayData(
-                            entry.customName));
+                    auto* textData =
+                        extraData->GetByType<
+                            RE::ExtraTextDisplayData>();
+                    if (!textData)
+                    {
+                        textData =
+                            new RE::ExtraTextDisplayData();
+                        extraData->Add(textData);
+                    }
+
+                    if (textData->displayNameText ||
+                        textData->ownerQuest)
+                    {
+                        return STRPM::Result::kUnsupportedItem;
+                    }
+
+                    textData->SetName(entry.customName);
                 }
 
                 if (owner)
