@@ -5,7 +5,7 @@
 extern "C" __declspec(dllexport) STRPMSKSE::PluginVersionData SKSEPlugin_Version =
 {
     STRPMSKSE::PluginVersionData::kVersion,
-    STRPMSKSE::kPluginVersion_0_11_2,
+    STRPMSKSE::kPluginVersion_0_11_3,
     "STRPluginMessagingAPI",
     "Caelvanost",
     "",
