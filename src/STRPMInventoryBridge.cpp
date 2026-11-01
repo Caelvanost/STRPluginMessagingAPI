@@ -829,6 +829,99 @@ namespace STRPMInventoryBridge
             return RE::TESForm::LookupByID(outFormID) != nullptr;
         }
 
+        constexpr std::uint32_t kSTRPMExtendedEntryFlags =
+            STRPM::kInventoryEntryHasCustomName |
+            STRPM::kInventoryEntryHasOwnership |
+            STRPM::kInventoryEntryHasOwnerRank |
+            STRPM::kInventoryEntryCannotWear;
+
+        bool HasSTRPMExtendedData(
+            const STRPM::InventoryEntry& entry) noexcept
+        {
+            return (entry.flags & kSTRPMExtendedEntryFlags) != 0;
+        }
+
+        STRPM::Result ReadSTRPMExtendedData(
+            RE::ExtraDataList* extraData,
+            STRPM::InventoryEntry& entry) noexcept
+        {
+            if (!extraData)
+                return STRPM::Result::kOk;
+
+            if (auto* text =
+                    extraData->GetByType<RE::ExtraTextDisplayData>();
+                text && text->IsPlayerSet())
+            {
+                const char* name = text->displayName.c_str();
+                if (!name)
+                    name = "";
+
+                const auto length = std::strnlen(
+                    name,
+                    STRPM::kMaxInventoryCustomNameBytes);
+                if (length >= STRPM::kMaxInventoryCustomNameBytes)
+                    return STRPM::Result::kUnsupportedItem;
+
+                entry.flags |= STRPM::kInventoryEntryHasCustomName;
+                entry.customNameLength =
+                    static_cast<std::uint16_t>(length);
+                std::memcpy(
+                    entry.customName,
+                    name,
+                    length);
+                entry.customName[length] = '\0';
+            }
+
+            if (auto* ownership =
+                    extraData->GetByType<RE::ExtraOwnership>();
+                ownership && ownership->owner)
+            {
+                STRPM::InventoryGameId ownerId{};
+                if (!CanonicalizeLocalFormID(
+                        ownership->owner->GetFormID(),
+                        ownerId) ||
+                    ownerId.modId == 0xFFFFFFFFu)
+                {
+                    return STRPM::Result::kUnsupportedItem;
+                }
+
+                entry.flags |= STRPM::kInventoryEntryHasOwnership;
+                entry.ownerId = ownerId;
+            }
+
+            if (auto* rank =
+                    extraData->GetByType<RE::ExtraRank>())
+            {
+                entry.flags |= STRPM::kInventoryEntryHasOwnerRank;
+                entry.ownerRank = rank->rank;
+            }
+
+            if (extraData->HasType<RE::ExtraCannotWear>())
+                entry.flags |= STRPM::kInventoryEntryCannotWear;
+
+            return STRPM::Result::kOk;
+        }
+
+        bool CustomNamesEqual(
+            const STRPM::InventoryEntry& left,
+            const STRPM::InventoryEntry& right) noexcept
+        {
+            const bool leftHas =
+                (left.flags & STRPM::kInventoryEntryHasCustomName) != 0;
+            const bool rightHas =
+                (right.flags & STRPM::kInventoryEntryHasCustomName) != 0;
+            if (leftHas != rightHas)
+                return false;
+            if (!leftHas)
+                return true;
+            if (left.customNameLength != right.customNameLength)
+                return false;
+            return std::memcmp(
+                       left.customName,
+                       right.customName,
+                       left.customNameLength) == 0;
+        }
+
         bool IsZeroGameId(
             const STRPM::InventoryGameId& value) noexcept
         {
@@ -870,6 +963,47 @@ namespace STRPMInventoryBridge
 
             if (!IsZeroGameId(entry.extraPoisonId) &&
                 entry.extraPoisonId.modId == 0xFFFFFFFFu)
+            {
+                return false;
+            }
+
+            const bool hasCustomName =
+                (entry.flags & STRPM::kInventoryEntryHasCustomName) != 0;
+            if (hasCustomName)
+            {
+                if (entry.customNameLength >=
+                        STRPM::kMaxInventoryCustomNameBytes ||
+                    entry.customName[entry.customNameLength] != '\0' ||
+                    std::strnlen(
+                        entry.customName,
+                        STRPM::kMaxInventoryCustomNameBytes) !=
+                        entry.customNameLength)
+                {
+                    return false;
+                }
+            }
+            else if (entry.customNameLength != 0)
+            {
+                return false;
+            }
+
+            const bool hasOwnership =
+                (entry.flags & STRPM::kInventoryEntryHasOwnership) != 0;
+            if (hasOwnership)
+            {
+                if (IsZeroGameId(entry.ownerId) ||
+                    entry.ownerId.modId == 0xFFFFFFFFu)
+                {
+                    return false;
+                }
+            }
+            else if (!IsZeroGameId(entry.ownerId))
+            {
+                return false;
+            }
+
+            if ((entry.flags & STRPM::kInventoryEntryHasOwnerRank) == 0 &&
+                entry.ownerRank != 0)
             {
                 return false;
             }
@@ -916,6 +1050,14 @@ namespace STRPMInventoryBridge
                 }
             }
 
+            if ((entry.flags & STRPM::kInventoryEntryHasOwnership) != 0 &&
+                !ResolveGameIdToLocalFormID(
+                    entry.ownerId,
+                    ignored))
+            {
+                return false;
+            }
+
             return true;
         }
 
@@ -949,7 +1091,11 @@ namespace STRPMInventoryBridge
                 left.extraPoisonCount !=
                     right.extraPoisonCount ||
                 left.extraSoulLevel != right.extraSoulLevel ||
-                left.flags != right.flags)
+                left.flags != right.flags ||
+                left.ownerId.baseId != right.ownerId.baseId ||
+                left.ownerId.modId != right.ownerId.modId ||
+                left.ownerRank != right.ownerRank ||
+                !CustomNamesEqual(left, right))
             {
                 return false;
             }
@@ -1059,7 +1205,10 @@ namespace STRPMInventoryBridge
                                 Native::ToPublic(
                                     nativeEntry,
                                     item.entry);
-                            if (converted != STRPM::Result::kOk)
+                            if (converted != STRPM::Result::kOk ||
+                                ReadSTRPMExtendedData(
+                                    extraData,
+                                    item.entry) != STRPM::Result::kOk)
                             {
                                 Log(
                                     "STRPM inventory snapshot skipped unsupported extra-data entry formId=0x%08X",
