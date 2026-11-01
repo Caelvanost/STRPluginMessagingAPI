@@ -884,26 +884,63 @@ namespace STRPMInventoryBridge
 
             if (auto* text =
                     extraData->GetByType<RE::ExtraTextDisplayData>();
-                text && text->IsPlayerSet())
+                text &&
+                text->IsPlayerSet() &&
+                !text->ownerQuest &&
+                !text->displayNameText)
             {
-                const char* name = text->displayName.c_str();
-                if (!name)
-                    name = "";
+                const char* rawName = text->displayName.c_str();
+                if (!rawName)
+                    rawName = "";
 
-                const auto length = strnlen_s(
-                    name,
+                const auto rawLength = strnlen_s(
+                    rawName,
                     STRPM::kMaxInventoryCustomNameBytes);
-                if (length >= STRPM::kMaxInventoryCustomNameBytes)
+                if (rawLength >= STRPM::kMaxInventoryCustomNameBytes)
                     return STRPM::Result::kUnsupportedItem;
 
-                entry.flags |= STRPM::kInventoryEntryHasCustomName;
-                entry.customNameLength =
-                    static_cast<std::uint16_t>(length);
-                std::memcpy(
-                    entry.customName,
-                    name,
-                    length);
-                entry.customName[length] = '\0';
+                auto length = rawLength;
+                if (text->customNameLength > 0)
+                {
+                    length = std::min(
+                        length,
+                        static_cast<std::size_t>(
+                            text->customNameLength));
+                }
+
+                std::string sanitized(
+                    rawName,
+                    rawName + length);
+                sanitized.erase(
+                    std::remove_if(
+                        sanitized.begin(),
+                        sanitized.end(),
+                        [](char value) {
+                            const auto byte =
+                                static_cast<unsigned char>(value);
+                            return byte < 0x20 || byte == 0x7F;
+                        }),
+                    sanitized.end());
+
+                if (!sanitized.empty())
+                {
+                    if (sanitized.size() >=
+                        STRPM::kMaxInventoryCustomNameBytes)
+                    {
+                        return STRPM::Result::kUnsupportedItem;
+                    }
+
+                    entry.flags |=
+                        STRPM::kInventoryEntryHasCustomName;
+                    entry.customNameLength =
+                        static_cast<std::uint16_t>(
+                            sanitized.size());
+                    std::memcpy(
+                        entry.customName,
+                        sanitized.data(),
+                        sanitized.size());
+                    entry.customName[sanitized.size()] = '\0';
+                }
             }
 
             if (auto* ownership =
