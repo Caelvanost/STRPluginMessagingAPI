@@ -1,6 +1,6 @@
 param(
     [string]$Configuration = "Release",
-    [string]$Version = "0.12.0",
+    [string]$Version = "0.11.1",
     [switch]$IncludeDiagnostic
 )
 
