@@ -876,6 +876,7 @@ namespace STRPMInventoryBridge
         }
 
         STRPM::Result ReadSTRPMExtendedData(
+            RE::TESBoundObject* object,
             RE::ExtraDataList* extraData,
             STRPM::InventoryEntry& entry) noexcept
         {
@@ -889,17 +890,27 @@ namespace STRPMInventoryBridge
                 !text->ownerQuest &&
                 !text->displayNameText)
             {
-                const char* rawName = text->displayName.c_str();
-                if (!rawName)
-                    rawName = "";
+                const char* renderedName = nullptr;
+                if (object)
+                {
+                    renderedName =
+                        extraData->GetDisplayName(object);
+                }
+                if (!renderedName || !*renderedName)
+                    renderedName = text->displayName.c_str();
+                if (!renderedName)
+                    renderedName = "";
 
-                const auto rawLength = strnlen_s(
-                    rawName,
+                const auto renderedLength = strnlen_s(
+                    renderedName,
                     STRPM::kMaxInventoryCustomNameBytes);
-                if (rawLength >= STRPM::kMaxInventoryCustomNameBytes)
+                if (renderedLength >=
+                    STRPM::kMaxInventoryCustomNameBytes)
+                {
                     return STRPM::Result::kUnsupportedItem;
+                }
 
-                auto length = rawLength;
+                auto length = renderedLength;
                 if (text->customNameLength > 0)
                 {
                     length = std::min(
@@ -909,8 +920,8 @@ namespace STRPMInventoryBridge
                 }
 
                 std::string sanitized(
-                    rawName,
-                    rawName + length);
+                    renderedName,
+                    renderedName + length);
                 sanitized.erase(
                     std::remove_if(
                         sanitized.begin(),
@@ -1282,6 +1293,7 @@ namespace STRPMInventoryBridge
                                     item.entry);
                             if (converted != STRPM::Result::kOk ||
                                 ReadSTRPMExtendedData(
+                                    object,
                                     extraData,
                                     item.entry) != STRPM::Result::kOk)
                             {
@@ -1554,7 +1566,19 @@ namespace STRPMInventoryBridge
                 return false;
             }
 
+            std::uint32_t localBaseFormID = 0;
+            RE::TESBoundObject* object = nullptr;
+            if (ResolveGameIdToLocalFormID(
+                    baseId,
+                    localBaseFormID))
+            {
+                object =
+                    RE::TESForm::LookupByID<RE::TESBoundObject>(
+                        localBaseFormID);
+            }
+
             return ReadSTRPMExtendedData(
+                       object,
                        extraData,
                        outEntry) == STRPM::Result::kOk;
         }
