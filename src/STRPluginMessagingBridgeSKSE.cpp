@@ -254,7 +254,7 @@ namespace
 extern "C" __declspec(dllexport) STRPMSKSE::PluginVersionData SKSEPlugin_Version =
 {
     STRPMSKSE::PluginVersionData::kVersion,
-    STRPMSKSE::kPluginVersion_0_12_0,
+    STRPMSKSE::kPluginVersion_0_11_1,
     "STRPluginMessagingBridge",
     "Caelvanost",
     "",
