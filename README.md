@@ -2,7 +2,7 @@
 
 Shared messaging and STR player-proxy resolution for Skyrim Together Reborn compatibility mods.
 
-Current development version: **v0.11.2**.
+Current development version: **v0.11.3**.
 
 STRPluginMessagingAPI gives SKSE mods one common layer over the **Skyrim Together Reborn 1.8.4 connection**. It is intended for mods such as AnimSyncTogether, OStimTogether, MorphSyncTogether, IEDSyncTogether and TradeTogether so each project does not need to duplicate networking or guess which Skyrim Actor represents a remote STR player.
 
@@ -24,9 +24,9 @@ official STR server + strpm-chat-relay Lua resource
 
 STRPM payloads use reserved `STRPM|v2|...` chat envelopes. The bridge intercepts those packets before STR's normal chat UI so transport packets do not appear as yellow chat messages. Ordinary STR chat remains untouched.
 
-## v0.11.2 — ExtraDataList allocation fix
+## v0.11.3 — ExtraDataList allocation fix
 
-v0.11.2 fixes the extended Inventory Bridge build/runtime path by allocating empty instance-data lists through STR's own native `GetExtraDataFromItem` path instead of the non-linkable CommonLibSSE `ExtraDataList` constructor. STRPM seeds a temporary health node only to make STR allocate the list, removes that sentinel immediately, then applies the STRPM-owned metadata.
+v0.11.3 fixes the extended Inventory Bridge build/runtime path by allocating empty instance-data lists through STR's own native `GetExtraDataFromItem` path instead of the non-linkable CommonLibSSE `ExtraDataList` constructor. STRPM seeds a temporary health node only to make STR allocate the list, removes that sentinel immediately, then applies the STRPM-owned metadata.
 
 ## v0.11.1 — Extended inventory instance metadata
 
@@ -283,7 +283,7 @@ A listener registered after mappings already exist receives an immediate snapsho
 Skyrim runtime:         1.6.1170        1.7.104
 SKSE:                   2.2.8           2.3.1
 Skyrim Together Reborn: 1.8.4           1.8.4
-STRPM:                  0.11.2          0.11.2
+STRPM:                  0.11.3          0.11.3
 Client chat opcode:     37              37
 Server chat opcode:     35              35
 Transport Send flags:   kReliable = 0   kReliable = 0
@@ -301,7 +301,7 @@ The **1.6.1170** profile is runtime-validated. The **1.7.104** profile uses the 
 
 ## Server resource
 
-v0.11.2 continues to use relay **v4 / 0.4.0**. The server console must report:
+v0.11.3 continues to use relay **v4 / 0.4.0**. The server console must report:
 
 ```text
 [STRPM] Chat relay v4 loaded (authenticated identity payload enabled)
@@ -311,7 +311,7 @@ The wire prefix remains `STRPM|v2|`.
 
 ## FOMOD
 
-v0.11.2 is packaged as one archive for both Skyrim runtimes. The installer first asks for the installation type:
+v0.11.3 is packaged as one archive for both Skyrim runtimes. The installer first asks for the installation type:
 
 ```text
 Client + Server
@@ -343,7 +343,7 @@ Data/SkyrimTogetherReborn/resources/strpm-chat-relay/
 Output:
 
 ```text
-dist/STRPluginMessagingAPI-v0.11.2.zip
+dist/STRPluginMessagingAPI-v0.11.3.zip
 ```
 
 The public release archive intentionally excludes `STRPluginMessagingDiagnostic.dll`.
@@ -363,7 +363,7 @@ build-test-vortex.bat
 Output:
 
 ```text
-dist/STRPluginMessagingAPI-v0.11.2-test.zip
+dist/STRPluginMessagingAPI-v0.11.3-test.zip
 ```
 
 The test archive additionally contains a matching `STRPluginMessagingDiagnostic.dll` in **both runtime payloads**, so either FOMOD choice can be tested with the same test ZIP.
@@ -372,7 +372,7 @@ The archive contains separate runtime payloads for 1.6.1170 and 1.7.104. The FOM
 
 ## Remaining work
 
-- runtime-test STRPM 0.11.2 on Skyrim 1.7.104 + SKSE 2.3.1 + STR 1.8.4;
+- runtime-test STRPM 0.11.3 on Skyrim 1.7.104 + SKSE 2.3.1 + STR 1.8.4;
 - validate bidirectional E2E messaging, ProxyResolver mappings and yellow-chat suppression on two clients;
 - runtime-test Skyrim 1.6.1179 when a suitable test environment is available;
 - discover/report the local STR connection ID directly;
